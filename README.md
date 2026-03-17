@@ -28,7 +28,7 @@
 	- 현재 저장소의 대표적인 Stim 회로 생성기다.
 	- `MeasurementTracker`, `SurgeryCircuitBuilder`, `build_zz_surgery_circuit(...)`를 통해 init/pre/merge/split/post/verify 단계를 가지는 ZZ surgery 회로를 만든다.
 	- detector 선언, observable 포함, MPP 기반 stabilizer 측정, 데이터/측정 오류 모델이 여기에 들어 있다.
-	- 관측량은 `init_LZ1 XOR init_LZ2 XOR seam XOR split_ancilla` 형태로 정의되어,
+	- 관측량은 `init_LZ1 XOR init_LZ2 XOR seam_delta(first XOR last)` 형태로 정의되어,
 	  초기 logical 상태와 ZZ 측정 결과의 불일치 여부를 직접 나타낸다.
 
 ## 예제와 실험 코드
@@ -100,7 +100,7 @@
 3. Pre rounds: patch1/patch2 독립 Z stabilizer 반복 측정
 4. Merge init (noiseless): seam 포함 merged stabilizer 기준 측정
 5. Merge rounds: merged Z stabilizer 반복 측정
-6. Split: ancilla Z 단발 측정 + split detector
+6. Split: ancilla X 단발 측정 + split detector
 7. Post init (noiseless): 분리 후 patch별 stabilizer 기준 측정
 8. Post rounds: patch1/patch2 독립 Z stabilizer 반복 측정
 9. Verify logical (noiseless): split/post 이후 각 patch logical Z 보존성 detector 확인
