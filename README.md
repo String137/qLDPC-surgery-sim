@@ -120,3 +120,8 @@ python example_ancilla_merge.py
 현재 워크스페이스에는 이미 `outputs/detslice_d3_tick04.svg` 같은 detector slice 시각화 파일들이 있다. 이것들은 각 tick에서 어떤 연산과 detector coverage가 나타나는지를 보여준다.
 
 반면 일반적인 의미의 detector error graph는 Stim detector error model과 관련 패키지(`stim`, `pymatching` 등)를 실제로 불러와서 생성해야 한다. 이 저장소에는 그 분석 로직의 재료가 이미 `fault_analysis.py`, `min_fault.py`에 들어 있지만, 그래프 자체를 별도 이미지로 뽑는 전용 스크립트는 아직 없다.
+
+# TODO
+detslice_d3_tickxx.svg 파일 보는게 나을듯.
+근데, 여러 게이트가 겹쳐있어서 error있는 tick이랑 gate랑 분리하는게 나을듯.
+weight 4짜리 MPP는 Z모양으로 이어진건지?
