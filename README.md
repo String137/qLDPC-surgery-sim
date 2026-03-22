@@ -1,126 +1,149 @@
 # qLDPC-surgery
 
-두 개의 코드 패치를 병합하고, ZZ surgery 회로를 Stim으로 생성하고, detector 및 fault 분석을 수행하는 실험용 저장소다. 현재 기준의 대표 회로는 `surgery_circuit.py`의 `build_zz_surgery_circuit(...)`가 만드는 rotated surface code 기반 ZZ surgery 회로다.
+두 개의 surface-code patch를 ZZ surgery로 연결하는 Stim 회로를 생성하고,
+detector 동작과 fault 조합을 분석하는 실험 저장소다.
 
-## 프로젝트 구성
+현재 기준 대표 회로는 surgery/surgery_circuit.py 의
+build_zz_surgery_circuit(d=3, rounds=3, p_data=0.01, p_meas=0.01) 이다.
 
-### 핵심 모델
+## 현재 확정 상태 요약
 
-- `primitives.py`
-	- `Qubit`, `Check`, `QubitRegistry`를 정의한다.
-	- 기하학적 qubit/check 표현과 Stim의 정수 인덱스 매핑을 분리하는 가장 낮은 레벨의 공용 모듈이다.
+이번 작업에서 아래가 반영되어 현재 기준으로 고정됐다.
 
-- `codes.py`
-	- `CodePatch` 추상 인터페이스와 `RotatedSurfaceCode`, `TrivialCode` 같은 구체 코드를 정의한다.
-	- 각 코드의 데이터 qubit, stabilizer, logical operator, Stim 회로 변환 기능의 출발점이다.
+1. merge -> split/post 경계 detector 보강
+- split tick에서 seam 경계 detector 4개만 있던 문제를 수정했다.
+- patch1/patch2 Z-check 8개에 대해, merge 마지막 측정값과 split 측정값을 비교하는 detector를 추가했다.
+- 결과적으로 split 경계 detector가 4개 -> 12개(= seam 4 + patch 8)로 증가했다.
 
-- `CSS.py`
-	- 보다 일반적인 CSS 코드, BBCode, 거리 계산, 병합된 CSS 코드 실험용 클래스를 담고 있다.
-	- `galois`, `docplex`, `cplex`, `networkx` 등을 이용한 대수적 분석 코드가 들어 있다.
+2. min-fault 기준 명확화
+- min-fault는 물리 fault 조합 기준으로 고정한다.
+- 사용 기준: detector XOR = 0, observable XOR != 0.
+- 현재 회로 기준 최소 weight는 3, 최소 조합 수는 112.
 
-### Surgery 구성
+3. detslice 생성 안정화
+- detslice tick 파일은 viz/visualize_circuit.py 가 생성한다.
+- tick 정렬은 파일 tick과 회로 tick을 1:1로 맞춘다.
+- 초기 tick(0~2)에서도 rotated surface 배경이 빠지지 않도록 보정했다.
 
-- `surgery.py`
-	- 코드 패치 둘 이상을 연결하는 병합 구조를 정의한다.
-	- `MergedPatch`, `MergedPatchWithAncilla`, 경계 쌍 생성 함수, ZZ/XX 병합 생성 함수를 제공한다.
+## 프로젝트 구조
 
-- `surgery_circuit.py`
-	- 현재 저장소의 대표적인 Stim 회로 생성기다.
-	- `MeasurementTracker`, `SurgeryCircuitBuilder`, `build_zz_surgery_circuit(...)`를 통해 init/pre/merge/split/post/verify 단계를 가지는 ZZ surgery 회로를 만든다.
-	- detector 선언, observable 포함, MPP 기반 stabilizer 측정, 데이터/측정 오류 모델이 여기에 들어 있다.
-	- 관측량은 `init_LZ1 XOR init_LZ2 XOR seam_delta(first XOR last)` 형태로 정의되어,
-	  초기 logical 상태와 ZZ 측정 결과의 불일치 여부를 직접 나타낸다.
+리팩토링 기준 핵심 디렉터리는 아래와 같다.
 
-## 예제와 실험 코드
+- core/
+  - primitives.py
+  - codes.py
+  - CSS.py
+- surgery/
+  - surgery.py
+  - surgery_circuit.py
+- analysis/
+  - fault_analysis.py
+  - min_fault.py
+- viz/
+  - visualize_circuit.py
+  - visualize_surgery.py
+  - visualize_dem_graph.py
+  - visualize_dem_graph_3d.py
 
-- `example_ancilla_merge.py`
-	- trivial ancilla를 사이에 둔 ZZ/XX merge 예제를 출력한다.
-	- ancilla를 끼운 세 코드 병합 구조를 빠르게 확인할 때 쓴다.
+각 디렉터리는 패키지로 동작하도록 __init__.py 를 포함한다.
 
-- `test.py`
-	- BBCode 기반 병합과 거리 계산을 직접 실행해보는 실험 스크립트다.
+## 디렉터리/파일 가이드
 
-- `test_fault_decoding.py`
-	- 회로에 단일 fault를 주입했을 때 detector syndrome이 어떻게 바뀌는지 보는 간단한 fault 테스트다.
+### 회로 생성 핵심
 
-- `test_fault_distance.py`
-	- 특정 단일 fault가 어떤 detector 식들을 트리거하는지 사람이 읽을 수 있는 형태로 설명하는 분석 스크립트다.
+- surgery/surgery_circuit.py
+  - ZZ surgery Stim 회로 빌더.
+  - detector, observable, phase(pre/merge/split/post/final) 정의의 기준 파일.
 
-## 분석 및 디코딩
+- surgery/surgery.py
+  - patch 병합 구조와 ancilla 포함 merge 구성 유틸.
 
-- `fault_analysis.py`
-	- detector error model을 기반으로 logical error rate, threshold sweep, minimum-weight logical fault 탐색, fault pattern 시각화를 수행한다.
-	- `pymatching`을 이용한 MWPM 디코딩 경로가 여기에 있다.
+- core/codes.py
+  - RotatedSurfaceCode 등 코드 패치 모델.
 
-- `min_fault.py`
-	- Stim detector error model의 `shortest_graphlike_error()`를 이용해 최소 logical fault를 찾고 spacetime 위에 시각화한다.
+- core/primitives.py
+  - Qubit, Check, QubitRegistry 등 기초 자료구조.
 
-## 시각화 도구
+### 분석/검증
 
-- `visualize.py`
-	- Tanner graph, 병합 코드 구조, ancilla merge 등의 정적 시각화를 담당한다.
+- analysis/min_fault.py
+  - shortest_graphlike_error 기반 최소 fault 확인용 스크립트.
 
-- `visualize_circuit.py`
-	- Stim 회로 timeline SVG와 tick별 detector slice SVG를 생성한다.
-	- 현재 저장소에서 detector 관련 그림을 가장 바로 얻을 수 있는 스크립트다.
+- check_undetected_minfault.py
+  - detector/observable 관점에서 error 항목을 요약해 보는 보조 스크립트.
+  - 참고 출력으로만 사용하고, 최종 min-fault 결론은 물리 fault 조합 기준 파일을 따른다.
 
-- `visualize_surgery.py`
-	- surgery의 각 phase와 round에서 활성화되는 stabilizer를 2D 격자에서 보여준다.
+- test_fault_decoding.py, test_fault_distance.py
+  - fault 주입 시 detector 반응/거리 해석 실험 스크립트.
 
-- `visualize_timeslice.py`
-	- Stim 회로 문자열을 파싱해서 tick별 MPP 측정을 공간적으로 배치해 보여준다.
+### 시각화
 
-## 노트북과 문서
+- viz/visualize_circuit.py
+  - timeline SVG + tick별 detslice SVG 생성.
+  - outputs/detslice/all/detslice_d3_tickXX.svg 를 만든다.
 
-- `BBCode.ipynb`
-	- BBCode/CSS 관련 대화형 실험용 노트북이다.
+- visualize_timeslice.py
+  - timeslice 시각화(별도 출력).
 
-- `ANCILLA_MERGE_README.md`
-	- ancilla를 끼운 merge 방식에만 집중한 보조 설명 문서다.
+- viz/visualize_surgery.py
+  - phase/round 단위 stabilizer 배치 시각화.
 
-## 출력 폴더
+## 출력 파일 기준
 
-- `outputs/`
-	- 시각화 스크립트들이 생성한 산출물을 저장한다.
-	- 현재는 `timeline_d3.svg`, `detslice_d3_tick*.svg` 같은 circuit/detector slice 결과를 두는 용도로 쓰인다.
+### 회로 스냅샷
 
-## 보통 어디서 시작하면 되는가
+- outputs/zz_surgery_d3.stim
+  - 현재 회로 텍스트 스냅샷.
 
-- 회로를 만들고 싶으면 `surgery_circuit.py`
-- 코드 구조를 보고 싶으면 `codes.py`, `surgery.py`
-- detector/fault 분석을 하고 싶으면 `fault_analysis.py`, `min_fault.py`
-- 그림을 보고 싶으면 `visualize_circuit.py`, `visualize_surgery.py`, `visualize_timeslice.py`
+### min-fault 결과
 
-## 현재 ZZ surgery 회로 단계 요약
+- outputs/surgery_min_fault_combos_d3_r3_allticks.csv
+  - 최소 weight 조합의 원본 테이블.
+  - 컬럼: combo_id, weight, obs_bits, tick, inst, pauli, q, x, y
 
-기본 빌더(`build_zz_surgery_circuit`)가 만드는 회로는 다음 순서로 동작한다.
+- outputs/surgery_min_fault_combos_d3_r3_allticks_summary.md
+  - CSV 요약 문서.
+  - q 배치 ASCII, 조합 분포, 112개 상세 조합 표 포함.
 
-1. Init logical (noiseless): patch1/patch2 logical Z를 먼저 측정해 초기 기준값을 저장
-2. Pre stabilizer init (noiseless): pre phase의 기준 stabilizer 측정
-3. Pre rounds: patch1/patch2 독립 Z stabilizer 반복 측정
-4. Merge init (noiseless): seam 포함 merged stabilizer 기준 측정
-5. Merge rounds: merged Z stabilizer 반복 측정
-6. Split: ancilla X 단발 측정 + split detector
-7. Post init (noiseless): 분리 후 patch별 stabilizer 기준 측정
-8. Post rounds: patch1/patch2 독립 Z stabilizer 반복 측정
-9. Verify logical (noiseless): split/post 이후 각 patch logical Z 보존성 detector 확인
-10. Observable finalize: init logical 기준 ZZ 불일치 observable 포함
+### 시각화
 
-## 빠른 실행 예시
+- outputs/timeline_d3.svg
+- outputs/detslice/all/detslice_d3_tick00.svg ~ tick20.svg
+
+## 재현 실행 순서
+
+아래 순서로 실행하면 현재 문서 상태를 재현할 수 있다.
 
 ```bash
-python visualize_circuit.py
-python fault_analysis.py
-python min_fault.py
-python example_ancilla_merge.py
+python3 -m viz.visualize_circuit
+python3 analysis/min_fault.py
 ```
 
-## detector 관련 참고
+중요:
 
-현재 워크스페이스에는 이미 `outputs/detslice_d3_tick04.svg` 같은 detector slice 시각화 파일들이 있다. 이것들은 각 tick에서 어떤 연산과 detector coverage가 나타나는지를 보여준다.
+- 리팩토링 후 `viz/visualize_circuit.py` 같은 파일을 직접 실행하면
+  패키지 경로 해석 문제로 ModuleNotFoundError가 발생할 수 있다.
+- 시각화 스크립트는 `python3 -m viz.visualize_circuit`처럼 모듈 실행을 권장한다.
 
-반면 일반적인 의미의 detector error graph는 Stim detector error model과 관련 패키지(`stim`, `pymatching` 등)를 실제로 불러와서 생성해야 한다. 이 저장소에는 그 분석 로직의 재료가 이미 `fault_analysis.py`, `min_fault.py`에 들어 있지만, 그래프 자체를 별도 이미지로 뽑는 전용 스크립트는 아직 없다.
+min-fault 상세 CSV/요약을 다시 만들 때는 프로젝트에서 사용 중인 조합 계산 스크립트를 실행한다.
+(현재 저장소에서는 outputs/surgery_min_fault_combos_d3_r3_allticks.csv,
+ outputs/surgery_min_fault_combos_d3_r3_allticks_summary.md 를 기준 산출물로 사용한다.)
 
-# TODO
+## 현재 회로 동작 단계(개요)
 
-TODO 항목 및 해결 메모는 `TODO.md`를 참고.
+1. init: patch 논리 상태/기준 측정
+2. pre: patch1/patch2 독립 stabilizer 반복
+3. merge: seam 포함 stabilizer 반복
+4. split: patch stabilizer + ancilla X 측정
+5. post: patch1/patch2 stabilizer 반복
+6. final: data readout + closing detector + observable include
+
+## 주의사항
+
+1. min-fault 결론은 반드시 물리 fault 조합 기준(detector XOR=0, observable XOR!=0)으로 해석한다.
+2. detslice 문제를 수정할 때는 viz/visualize_circuit.py 를 기준으로 본다.
+3. outputs 하위 파일은 스크립트 재실행 시 갱신되므로, 커밋 전 갱신 여부를 확인한다.
+
+## TODO
+
+추가 작업 목록은 TODO.md 를 참고.
