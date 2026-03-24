@@ -6,6 +6,19 @@ detector 동작과 fault 조합을 분석하는 실험 저장소다.
 현재 기준 대표 회로는 surgery/surgery_circuit.py 의
 build_zz_surgery_circuit(d=3, rounds=3, p_data=0.01, p_meas=0.01) 이다.
 
+## 최근 변경점 (2026-03-24)
+- stim 내장 surface code 스타일로 tick/라운드 구조 리팩토링 (error→Z측정→TICK→X측정→TICK)
+- 각 phase별 syndrome 측정, detector 연결, observable 정의를 명확히 분리
+- visualize_circuit.py: build_zz_surgery_circuit만 사용, 2D 좌표/큐빗 개수/phase별 tick labeling 등 surface code 구조에 맞게 시각화
+
+# qLDPC-surgery
+
+두 개의 surface-code patch를 ZZ surgery로 연결하는 Stim 회로를 생성하고,
+detector 동작과 fault 조합을 분석하는 실험 저장소다.
+
+현재 기준 대표 회로는 surgery/surgery_circuit.py 의
+build_zz_surgery_circuit(d=3, rounds=3, p_data=0.01, p_meas=0.01) 이다.
+
 ## 현재 확정 상태 요약
 
 이번 작업에서 아래가 반영되어 현재 기준으로 고정됐다.
