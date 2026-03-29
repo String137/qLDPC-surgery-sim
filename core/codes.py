@@ -20,7 +20,9 @@ from core.primitives import Qubit, Check, QubitRegistry
 # ---------------------------------------------------------------------------
 
 class CodePatch(ABC):
-
+    def __init__(self, offset=(0.0, 0.0)):
+        self._offset = offset    # (float, float)
+    
     @property
     @abstractmethod
     def name(self) -> str: ...
@@ -205,95 +207,78 @@ class RotatedSurfaceCode(CodePatch):
         L_Z={0,3,6}  L_X={0,1,2}
     """
 
-    def __init__(self, d: int, patch_name: str = "patch"):
+    def __init__(self, d: int, patch_name: str = "patch", offset=(0.0, 0.0)):
         self.d = d
         self._name = patch_name
+        self._offset = offset
         self._build()
 
     @property
     def name(self) -> str:
         return self._name
 
-    def _q(self, r: int, c: int) -> Qubit:
-        return Qubit(self._name, r * self.d + c)
+    def _q(self, x: int, y: int) -> Qubit:
+        # x: 오른쪽으로 증가, y: 아래로 증가
+        return Qubit(self._name, y * self.d + x, (x, y))
 
     def _build(self):
         d = self.d
-        self._data_qubits = [self._q(r, c)
-                             for r in range(d) for c in range(d)]
+        # x: 오른쪽, y: 아래로 증가
+        self._data_qubits = [self._q(x, y)
+                                for y in range(d) for x in range(d)]
 
         self._x_checks: list[Check] = []
         self._z_checks: list[Check] = []
 
-        # ------------------------------------------------------------------
-        # Bulk plaquettes: center at (r+0.5, c+0.5), r,c in 0..d-2
-        # ------------------------------------------------------------------
-        for r in range(d - 1):
-            for c in range(d - 1):
+        # Bulk plaquettes: center at (x+0.5, y+0.5), x,y in 0..d-2
+        for y in range(d - 1):
+            for x in range(d - 1):
                 support = frozenset([
-                    self._q(r,   c),   self._q(r,   c+1),
-                    self._q(r+1, c),   self._q(r+1, c+1),
+                    self._q(x,   y),   self._q(x+1, y),
+                    self._q(x, y+1),   self._q(x+1, y+1),
                 ])
-                if (r + c) % 2 == 0:
-                    self._z_checks.append(Check(support, "Z", f"Z_bulk_{r}_{c}"))
+                if (x + y) % 2 == 0:
+                    self._z_checks.append(Check(support, "Z", f"Z_bulk_{x}_{y}"))
                 else:
-                    self._x_checks.append(Check(support, "X", f"X_bulk_{r}_{c}"))
+                    self._x_checks.append(Check(support, "X", f"X_bulk_{x}_{y}"))
 
-        # ------------------------------------------------------------------
-        # Boundary half-plaquettes
-        #
-        # Key insight: top/bottom boundaries are Z-type, left/right are X-type.
-        # A boundary check is the exposed edge of a bulk plaquette of the
-        # SAME type that touches the boundary.
-        #
-        # Top boundary Z: exposed top edge of bulk Z plaquettes in row r=0.
-        #   Bulk Z plaquettes in row r=0 are at columns c where (0+c)%2==0,
-        #   i.e. c=0,2,4,... Their top edge is {(0,c),(0,c+1)}.
-        #
-        # Bottom boundary Z: exposed bottom edge of bulk Z plaquettes in row r=d-2.
-        #   Bulk Z at (r=d-2, c) where (d-2+c)%2==0.
-        #   Their bottom edge is {(d-1,c),(d-1,c+1)}.
-        #
-        # Left boundary X: exposed left edge of bulk X plaquettes in col c=0.
-        #   Bulk X at (r,c=0) where (r+0)%2==1, i.e. r=1,3,...
-        #   Their left edge is {(r,0),(r+1,0)}.
-        #
-        # Right boundary X: exposed right edge of bulk X plaquettes in col c=d-2.
-        #   Bulk X at (r,c=d-2) where (r+d-2)%2==1.
-        #   Their right edge is {(r,d-1),(r+1,d-1)}.
-        #
-        # This guarantees every boundary check shares exactly 2 qubits with
-        # the adjacent bulk check of the same type → commutes with all others.
-        # ------------------------------------------------------------------
-
-        # Top boundary Z
-        # Z_top at column c sits on the top edge of bulk plaquette (r=0, c).
-        # For commutativity with X-bulk, the plaquette to the LEFT (r=0, c-1)
-        # must be Z-type, i.e. (0 + c-1) % 2 == 0  ↔  c % 2 == 1.
-        for c in range(d - 1):
-            if (0 + c) % 2 == 1:        # bulk Z plaquette at (r=0, c)
+        # Top boundary Z (y=0)
+        for x in range(d - 1):
+            if (x + 0) % 2 == 1:
                 self._z_checks.append(Check(
-                    frozenset([self._q(0, c), self._q(0, c+1)]),
-                    "Z", f"Z_top_{c}"))
+                    frozenset([self._q(x, 0), self._q(x+1, 0)]),
+                    "Z", f"Z_top_{x}"))
 
-        # Bottom boundary Z
-        for c in range(d - 1):
-            if (d - 2 + c) % 2 == 1:    # bulk Z plaquette at (r=d-2, c)
+        # Bottom boundary Z (y=d-1)
+        for x in range(d - 1):
+            if (x + d - 2) % 2 == 1:
                 self._z_checks.append(Check(
-                    frozenset([self._q(d-1, c), self._q(d-1, c+1)]),
-                    "Z", f"Z_bot_{c}"))
+                    frozenset([self._q(x, d-1), self._q(x+1, d-1)]),
+                    "Z", f"Z_bot_{x}"))
 
-        # Left boundary X
-        # X_left at row r sits on the left edge of bulk plaquette (r, c=0).
-        # For commutativity with Z-bulk, the plaquette ABOVE (r-1, c=0)
-        # must be X-type, i.e. (r-1 + 0) % 2 == 1  ↔  r % 2 == 0.
-        for r in range(d - 1):
-            if (r + 0) % 2 == 0:        # bulk X plaquette at (r, c=0)
+        # Left boundary X (x=0)
+        for y in range(d - 1):
+            if (0 + y) % 2 == 0:
                 self._x_checks.append(Check(
-                    frozenset([self._q(r, 0), self._q(r+1, 0)]),
-                    "X", f"X_left_{r}"))
+                    frozenset([self._q(0, y), self._q(0, y+1)]),
+                    "X", f"X_left_{y}"))
 
-        # Right boundary X
+        # Right boundary X (x=d-1)
+        for y in range(d - 1):
+            if (d - 1 + y) % 2 == 0:
+                self._x_checks.append(Check(
+                    frozenset([self._q(d-1, y), self._q(d-1, y+1)]),
+                    "X", f"X_right_{y}"))
+
+        # Logical operators (Fowler convention)
+        # L_Z: 오른쪽 끝 x=d-1 column
+        # L_X: 맨 위 y=0 row
+        self._z_logicals = [
+            frozenset(self._q(d-1, y) for y in range(d))
+        ]
+        self._x_logicals = [
+            frozenset(self._q(x, 0) for x in range(d))
+        ]
         for r in range(d - 1):
             if (r + d - 2) % 2 == 0:    # bulk X plaquette at (r, c=d-2)
                 self._x_checks.append(Check(
@@ -320,18 +305,20 @@ class RotatedSurfaceCode(CodePatch):
     def z_logicals(self):                 return self._z_logicals
 
     # -- geometry ------------------------------------------------------------
-    def qubit_coords(self) -> dict[Qubit, tuple[int, int]]:
-        return {self._q(r, c): (r, c)
-                for r in range(self.d) for c in range(self.d)}
-
+    # def qubit_coords(self) -> dict[Qubit, tuple[int, int]]:
+    #     return {self._q(r, c): (r, c)
+    #             for r in range(self.d) for c in range(self.d)}
+    def qubit_from_coord(self, x: int, y: int) -> Qubit:
+        idx = y * self.d + x
+        return self._data_qubits[idx]
     def boundary_qubits(self, side: str) -> list[Qubit]:
         """side: 'top', 'bottom', 'left', 'right'"""
         d = self.d
         return {
-            "top":    [self._q(0, c)   for c in range(d)],
-            "bottom": [self._q(d-1, c) for c in range(d)],
-            "left":   [self._q(r, 0)   for r in range(d)],
-            "right":  [self._q(r, d-1) for r in range(d)],
+            "top":    [self._q(x, 0)   for x in range(d)],
+            "bottom": [self._q(x, d-1) for x in range(d)],
+            "left":   [self._q(0, y)   for y in range(d)],
+            "right":  [self._q(d-1, y) for y in range(d)],
         }[side]
 
 
@@ -346,13 +333,20 @@ class TrivialCode(CodePatch):
     Used to represent ancilla lines in qLDPC surgery.
     All qubits are logical — no stabilizers.
     
-    Example: 1-row ancilla for merging two surface codes.
+    Example: 1-column ancilla for merging two surface codes.
     """
     
-    def __init__(self, n: int, code_name: str = "trivial"):
+    def __init__(self, n: int, patch_name: str = "trivial", offset=(0.0, 0.0), direction: str = "vertical"):
         self.n = n
-        self._name = code_name
-        self._data_qubits = [Qubit(code_name, i) for i in range(n)]
+        self._name = patch_name
+        self._offset = offset
+        self._direction = direction
+        if direction == "vertical":
+            self._data_qubits = [Qubit(patch_name, i, (0, i)) for i in range(n)]
+        elif direction == "horizontal":
+            self._data_qubits = [Qubit(patch_name, i, (i, 0)) for i in range(n)]
+        else:
+            raise ValueError("direction must be 'vertical' or 'horizontal'")
     
     @property
     def name(self) -> str:

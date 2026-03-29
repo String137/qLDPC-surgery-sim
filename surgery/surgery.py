@@ -36,7 +36,7 @@ class MergedPatch(CodePatch):
         self,
         patch1: CodePatch,
         patch2: CodePatch,
-        seam_data_qubits: list[Qubit],      # Qubit("seam", i)
+        seam: CodePatch,      # Qubit("seam", i)
         seam_x_checks: list[Check],
         seam_z_checks: list[Check],
         name: str = "merged",
@@ -44,13 +44,24 @@ class MergedPatch(CodePatch):
         self._name = name
         self.patch1 = patch1
         self.patch2 = patch2
-        self._seam_qubits = seam_data_qubits
+        self._seam_qubits = seam.data_qubits()
 
         # Merged check lists (patch1 + seam + patch2 순서)
+
+        merged_x_checks_from_patch1 = []
+        for chk in patch1.x_checks():
+            if chk.label.split("_")[1] == "right":
+                continue
+            merged_x_checks_from_patch1.append(chk)
+        merged_x_checks_from_patch2 = []
+        for chk in patch2.x_checks():
+            if chk.label.split("_")[1] == "left":
+                continue
+            merged_x_checks_from_patch2.append(chk)
         self._x_checks = (
-            patch1.x_checks() +
+            merged_x_checks_from_patch1 +
             seam_x_checks +
-            patch2.x_checks()
+            merged_x_checks_from_patch2
         )
         self._z_checks = (
             patch1.z_checks() +
@@ -75,7 +86,7 @@ class MergedPatch(CodePatch):
         # Global registry: patch1 → seam → patch2 순서
         self._registry = QubitRegistry()
         self._registry.register(patch1.data_qubits())
-        self._registry.register(seam_data_qubits)
+        self._registry.register(seam.data_qubits())
         self._registry.register(patch2.data_qubits())
 
     @property
@@ -108,6 +119,8 @@ class MergedPatch(CodePatch):
 # MergedPatchWithAncilla
 # ---------------------------------------------------------------------------
 
+# 잘 정의하면 MergedPatch는 없애도 될 듯? 그냥 이 이름을 그걸로 바꾸자.
+
 class MergedPatchWithAncilla(CodePatch):
     """
     Three-way merge: patch1 ↔ ancilla ↔ patch2
@@ -129,8 +142,8 @@ class MergedPatchWithAncilla(CodePatch):
         patch1: CodePatch,
         ancilla: CodePatch,
         patch2: CodePatch,
-        seam_x_checks: list[Check],
-        seam_z_checks: list[Check],
+        merged_x_checks: list[Check],
+        merged_z_checks: list[Check],
         name: str = "merged-ancilla",
     ):
         self._name = name
@@ -140,19 +153,11 @@ class MergedPatchWithAncilla(CodePatch):
         
         # Merged check lists (patch1 + seam + patch2) 순서
         # Note: patch1, ancilla, patch2 각 코드의 checks + seam checks
-        self._x_checks = (
-            patch1.x_checks() +
-            seam_x_checks +
-            ancilla.x_checks() +
-            patch2.x_checks()
-        )
+        self._x_checks = merged_x_checks
         
-        self._z_checks = (
-            patch1.z_checks() +
-            seam_z_checks +
-            ancilla.z_checks() +
-            patch2.z_checks()
-        )
+        self._z_checks = merged_z_checks
+
+        # 이 밑에 다 고쳐야함.
         
         # Seam check tracking
         self._seam_x_checks = seam_x_checks
@@ -185,7 +190,21 @@ class MergedPatchWithAncilla(CodePatch):
         self._registry.register(patch1.data_qubits())
         self._registry.register(ancilla.data_qubits())
         self._registry.register(patch2.data_qubits())
-    
+        self.patch_dict = {
+            patch1.name: patch1,
+            ancilla.name: ancilla,
+            patch2.name: patch2
+        }
+
+    # qubit을 넣으면 patch 이름을 통해 MergedPatch의 local coord를 계산해 반환하는 함수
+    # 각 patch 입장에선 global coord를 반환하는 것임.
+    def local_coord(self, q: Qubit) -> tuple[float, float]:
+        patch = self.patch_dict[q.patch_name]
+        local_x, local_y = q._local_coord()
+        global_x = local_x + patch._offset[0]
+        global_y = local_y + patch._offset[1]
+        return (global_x, global_y)
+
     @property
     def name(self): return self._name
     
@@ -228,10 +247,7 @@ class MergedPatchWithAncilla(CodePatch):
 def build_zz_merged(
     patch1: CodePatch,
     patch2: CodePatch,
-    boundary_pairs: list[tuple[Qubit, Qubit]],
-    # (patch1_boundary_qubit, patch2_boundary_qubit) 쌍
-    # seam qubit i가 이 둘 사이에 삽입됨
-    seam_name: str = "seam",
+    seam: CodePatch
 ) -> MergedPatch:
     """
     ZZ logical 측정을 위한 merged code.
@@ -242,23 +258,97 @@ def build_zz_merged(
     Product of seam Z checks = L_Z1 ⊗ L_Z2 이 되도록
     boundary_pairs는 각 logical string의 qubit을 순서대로 전달.
     """
-    seam_qubits = [Qubit(seam_name, i) for i in range(len(boundary_pairs))]
-
-    seam_z_checks = [
-        Check(
-            frozenset([q1, seam_qubits[i], q2]),
-            "Z",
-            f"seam_Z_{i}",
-        )
-        for i, (q1, q2) in enumerate(boundary_pairs)
+    assert patch1.d == patch2.d
+    left_seam_z_checks = [
+    Check(
+        frozenset([patch1.qubit_from_coord(patch1.d-1, i),
+                    patch1.qubit_from_coord(patch1.d-1, i+1),
+                      seam.data_qubits()[i],
+                        seam.data_qubits()[i+1]]),
+        "Z",
+        f"left_seam_Z_{i//2}",
+    )
+    for i in range(0, patch1.d-1, 2)
     ]
+    left_seam_z_checks.append(
+        Check(
+            frozenset([patch1.qubit_from_coord(patch1.d-1, patch1.d-1),
+                        seam.data_qubits()[patch1.d-1]]),
+            "Z",
+            f"left_seam_Z_{(patch1.d-1)//2}",
+        )
+    )
+    right_seam_z_checks = [
+        Check(
+            frozenset([patch2.qubit_from_coord(0, i),
+                        patch2.qubit_from_coord(0, i+1),
+                        seam.data_qubits()[i],
+                            seam.data_qubits()[i+1]]),
+            "Z",
+            f"right_seam_Z_{i//2}",
+        )
+        for i in range(1, patch2.d-1, 2)
+    ]
+    right_seam_z_checks.append(
+        Check(
+            frozenset([patch2.qubit_from_coord(0, 0),
+                        seam.data_qubits()[0]]),
+            "Z",
+            f"right_seam_Z_{(patch2.d-1)//2}",
+        )
+    )
+
+    # seam_x_check는 left와 right 두 종류로 이뤄져있음.
+    # left seam_x_check는 patch1.qubit_from_coord(d-1,i),patch1.qubit_from_coord(d-1,i+1), seam qubit(i), seam qubit(i+1)로 이뤄지고 i=1,3,5,...,d-2
+    # right seam_x_check는 patch2.qubit_from_coord(0,i),patch2.qubit_from_coord(0,i+1), seam qubit(i), seam qubit(i+1)로 이뤄짐. i=0,2,4,...,d-3 
+
+    left_seam_x_checks = [
+        Check(
+            frozenset([patch1.qubit_from_coord(patch1.d-1, i),
+                        patch1.qubit_from_coord(patch1.d-1, i+1),
+                        seam.data_qubits()[i],
+                            seam.data_qubits()[i+1]]),
+            "X",
+            f"left_seam_X_{(i-1)//2}",
+        )
+        for i in range(1, patch1.d-1, 2)
+    ]
+    right_seam_x_checks = [
+        Check(
+            frozenset([patch2.qubit_from_coord(0, i),
+                        patch2.qubit_from_coord(0, i+1),
+                        seam.data_qubits()[i],
+                            seam.data_qubits()[i+1]]),
+            "X",
+            f"right_seam_X_{i//2}",
+        )
+        for i in range(0, patch2.d-1, 2)
+    ]
+
+    seam_z_checks = left_seam_z_checks + right_seam_z_checks
+    seam_x_checks = left_seam_x_checks + right_seam_x_checks
+
+    merged_z_checks = patch1.z_checks() + seam_z_checks + patch2.z_checks()
+    # x_check는 기존 patch의 안쪽 boundary check들은 제외함. 여기서 boundary check라고 함은 weight-2짜리 check를 의미
+
+    merged_x_checks = []
+    for chk in patch1.x_checks():
+        if chk.label.split("_")[1] == "right":
+            continue
+        merged_x_checks.append(chk)
+    merged_x_checks += seam_x_checks
+    for chk in patch2.x_checks():
+        if chk.label.split("_")[1] == "left":
+            continue
+        merged_x_checks.append(chk)
+    
 
     return MergedPatch(
         patch1=patch1,
         patch2=patch2,
-        seam_data_qubits=seam_qubits,
-        seam_x_checks=[],
-        seam_z_checks=seam_z_checks,
+        seam=seam,
+        merged_x_checks=merged_x_checks,
+        merged_z_checks=merged_z_checks,
         name="ZZ-merged",
     )
 

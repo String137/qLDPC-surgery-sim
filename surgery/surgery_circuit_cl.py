@@ -94,7 +94,7 @@ class SurgeryCircuitCL:
         ############## DEBUG ##############
         for chk in checks:
             # qubit coords in chk
-            print([b._data_coord(q) for q in chk.qubits])
+            print([b._data_coord(q) for q in chk.qubits], chk)
         ####################################
         for chk in checks:
             if len(chk.qubits) == 4:
@@ -260,8 +260,17 @@ class SurgeryCircuitCL:
         self.circuit.append("TICK")
 
         extra_z = [i for i in self.syn_z_m if i not in set(self.syn_z_pp)]
+        extra_x = [i for i in self.syn_x_m if i not in set(self.syn_x_pp)]
+        print("#"*50)
+        print(self.syn_x_m)
+        print(self.syn_z_m)
+        print(extra_x)
+        print("#"*50)
         if extra_z:
             self.circuit.append("R", extra_z)
+            self.circuit.append("TICK")
+        if extra_x:
+            self.circuit.append("R", extra_x)
             self.circuit.append("TICK")
 
         n_zpp  = len(self.b.zchk_p1 + self.b.zchk_p2)

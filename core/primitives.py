@@ -21,11 +21,15 @@ class Qubit:
     patch: 어느 코드 패치에 속하는지 (e.g. "patch1", "seam", "patch2")
     idx:   그 패치 내의 local index
     """
-    patch: str
+    patch_name: str
     idx: int
+    local_coord: tuple[float, float]
 
     def __repr__(self):
-        return f"Q({self.patch},{self.idx})"
+        return f"Q({self.patch_name},{self.idx})"
+    def _local_coord(self):
+        return self.local_coord
+    
 
 
 # ---------------------------------------------------------------------------
