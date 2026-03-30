@@ -36,7 +36,7 @@ class MergedPatch(CodePatch):
         self,
         patch1: CodePatch,
         patch2: CodePatch,
-        seam: CodePatch,      # Qubit("seam", i)
+        seam_data_qubits: list[Qubit],
         seam_x_checks: list[Check],
         seam_z_checks: list[Check],
         name: str = "merged",
@@ -44,24 +44,12 @@ class MergedPatch(CodePatch):
         self._name = name
         self.patch1 = patch1
         self.patch2 = patch2
-        self._seam_qubits = seam.data_qubits()
+        self._seam_qubits = seam_data_qubits
 
-        # Merged check lists (patch1 + seam + patch2 순서)
-
-        merged_x_checks_from_patch1 = []
-        for chk in patch1.x_checks():
-            if chk.label.split("_")[1] == "right":
-                continue
-            merged_x_checks_from_patch1.append(chk)
-        merged_x_checks_from_patch2 = []
-        for chk in patch2.x_checks():
-            if chk.label.split("_")[1] == "left":
-                continue
-            merged_x_checks_from_patch2.append(chk)
         self._x_checks = (
-            merged_x_checks_from_patch1 +
+            patch1.x_checks() +
             seam_x_checks +
-            merged_x_checks_from_patch2
+            patch2.x_checks()
         )
         self._z_checks = (
             patch1.z_checks() +
@@ -69,7 +57,6 @@ class MergedPatch(CodePatch):
             patch2.z_checks()
         )
 
-        # Seam check 위치 기록 (index range in merged list)
         self._seam_x_slice = slice(
             len(patch1.x_checks()),
             len(patch1.x_checks()) + len(seam_x_checks)
@@ -79,14 +66,12 @@ class MergedPatch(CodePatch):
             len(patch1.z_checks()) + len(seam_z_checks)
         )
 
-        # Logicals: 두 패치 각자의 것 유지
         self._x_logicals = patch1.x_logicals() + patch2.x_logicals()
         self._z_logicals = patch1.z_logicals() + patch2.z_logicals()
 
-        # Global registry: patch1 → seam → patch2 순서
         self._registry = QubitRegistry()
         self._registry.register(patch1.data_qubits())
-        self._registry.register(seam.data_qubits())
+        self._registry.register(seam_data_qubits)
         self._registry.register(patch2.data_qubits())
 
     @property
@@ -112,132 +97,89 @@ class MergedPatch(CodePatch):
         return self._z_checks[self._seam_z_slice]
 
     def make_registry(self) -> QubitRegistry:
-        return self._registry  # 외부에서 새로 만들지 않도록 override
+        return self._registry
 
 
 # ---------------------------------------------------------------------------
 # MergedPatchWithAncilla
 # ---------------------------------------------------------------------------
 
-# 잘 정의하면 MergedPatch는 없애도 될 듯? 그냥 이 이름을 그걸로 바꾸자.
-
 class MergedPatchWithAncilla(CodePatch):
     """
     Three-way merge: patch1 ↔ ancilla ↔ patch2
-    
-    Qubit namespace:
-        patch1.data_qubits()         — patch1의 Qubit 객체 그대로
-        ancilla.data_qubits()        — ancilla의 Qubit 객체 그대로
-        patch2.data_qubits()         — patch2의 Qubit 객체 그대로
-    
-    Seam consists of:
-        - Checks between patch1 and ancilla
-        - Checks between ancilla and patch2
-    
-    Global registry: patch1 → ancilla → patch2 순서
     """
-    
+
     def __init__(
         self,
         patch1: CodePatch,
         ancilla: CodePatch,
         patch2: CodePatch,
-        merged_x_checks: list[Check],
-        merged_z_checks: list[Check],
+        seam_x_checks: list[Check],
+        seam_z_checks: list[Check],
         name: str = "merged-ancilla",
     ):
         self._name = name
         self.patch1 = patch1
         self.ancilla = ancilla
         self.patch2 = patch2
-        
-        # Merged check lists (patch1 + seam + patch2) 순서
-        # Note: patch1, ancilla, patch2 각 코드의 checks + seam checks
-        self._x_checks = merged_x_checks
-        
-        self._z_checks = merged_z_checks
 
-        # 이 밑에 다 고쳐야함.
-        
-        # Seam check tracking
+        self._x_checks = (
+            patch1.x_checks() +
+            seam_x_checks +
+            ancilla.x_checks() +
+            patch2.x_checks()
+        )
+
+        self._z_checks = (
+            patch1.z_checks() +
+            seam_z_checks +
+            ancilla.z_checks() +
+            patch2.z_checks()
+        )
+
         self._seam_x_checks = seam_x_checks
         self._seam_z_checks = seam_z_checks
-        
-        # Track seam indices in x_checks
+
         n_patch1_x = len(patch1.x_checks())
         n_seam_x = len(seam_x_checks)
-        
-        self._seam_x_slice = slice(
-            n_patch1_x,
-            n_patch1_x + n_seam_x
-        )
-        
-        # Track seam indices in z_checks
+        self._seam_x_slice = slice(n_patch1_x, n_patch1_x + n_seam_x)
+
         n_patch1_z = len(patch1.z_checks())
         n_seam_z = len(seam_z_checks)
-        
-        self._seam_z_slice = slice(
-            n_patch1_z,
-            n_patch1_z + n_seam_z
-        )
-        
-        # Logicals: 두 패치 각자의 것 유지 (ancilla는 논리 큐빗이 아님)
+        self._seam_z_slice = slice(n_patch1_z, n_patch1_z + n_seam_z)
+
         self._x_logicals = patch1.x_logicals() + patch2.x_logicals()
         self._z_logicals = patch1.z_logicals() + patch2.z_logicals()
-        
-        # Global registry: patch1 → ancilla → patch2 순서
+
         self._registry = QubitRegistry()
         self._registry.register(patch1.data_qubits())
         self._registry.register(ancilla.data_qubits())
         self._registry.register(patch2.data_qubits())
-        self.patch_dict = {
-            patch1.name: patch1,
-            ancilla.name: ancilla,
-            patch2.name: patch2
-        }
-
-    # qubit을 넣으면 patch 이름을 통해 MergedPatch의 local coord를 계산해 반환하는 함수
-    # 각 patch 입장에선 global coord를 반환하는 것임.
-    def local_coord(self, q: Qubit) -> tuple[float, float]:
-        patch = self.patch_dict[q.patch_name]
-        local_x, local_y = q._local_coord()
-        global_x = local_x + patch._offset[0]
-        global_y = local_y + patch._offset[1]
-        return (global_x, global_y)
 
     @property
     def name(self): return self._name
-    
+
     def data_qubits(self) -> list[Qubit]:
         return (self.patch1.data_qubits() +
                 self.ancilla.data_qubits() +
                 self.patch2.data_qubits())
-    
-    def x_checks(self) -> list[Check]: 
-        return self._x_checks
-    
-    def z_checks(self) -> list[Check]: 
-        return self._z_checks
-    
-    def x_logicals(self):              
-        return self._x_logicals
-    
-    def z_logicals(self):              
-        return self._z_logicals
-    
+
+    def x_checks(self) -> list[Check]:  return self._x_checks
+    def z_checks(self) -> list[Check]:  return self._z_checks
+    def x_logicals(self):               return self._x_logicals
+    def z_logicals(self):               return self._z_logicals
+
     def registry(self) -> QubitRegistry:
         return self._registry
-    
+
     def seam_x_checks(self) -> list[Check]:
-        """All seam X checks (both seam1 and seam2)"""
         return self._seam_x_checks
-    
+
     def seam_z_checks(self) -> list[Check]:
-        """All seam Z checks (both seam1 and seam2)"""
         return self._seam_z_checks
-    
+
     def make_registry(self) -> QubitRegistry:
-        return self._registry  # 외부에서 새로 만들지 않도록 override
+        return self._registry
 
 
 # ---------------------------------------------------------------------------
@@ -247,108 +189,26 @@ class MergedPatchWithAncilla(CodePatch):
 def build_zz_merged(
     patch1: CodePatch,
     patch2: CodePatch,
-    seam: CodePatch
+    boundary_pairs: list[tuple[Qubit, Qubit]],
+    seam_name: str = "seam",
 ) -> MergedPatch:
-    """
-    ZZ logical 측정을 위한 merged code.
+    seam_qubits = [Qubit(seam_name, i) for i in range(len(boundary_pairs))]
 
-    각 boundary pair (a, b)에 대해 seam qubit s_i 추가 후
-    weight-3 Z check {a, s_i, b} 생성.
-
-    Product of seam Z checks = L_Z1 ⊗ L_Z2 이 되도록
-    boundary_pairs는 각 logical string의 qubit을 순서대로 전달.
-    """
-    assert patch1.d == patch2.d
-    left_seam_z_checks = [
-    Check(
-        frozenset([patch1.qubit_from_coord(patch1.d-1, i),
-                    patch1.qubit_from_coord(patch1.d-1, i+1),
-                      seam.data_qubits()[i],
-                        seam.data_qubits()[i+1]]),
-        "Z",
-        f"left_seam_Z_{i//2}",
-    )
-    for i in range(0, patch1.d-1, 2)
-    ]
-    left_seam_z_checks.append(
+    seam_z_checks = [
         Check(
-            frozenset([patch1.qubit_from_coord(patch1.d-1, patch1.d-1),
-                        seam.data_qubits()[patch1.d-1]]),
+            frozenset([q1, seam_qubits[i], q2]),
             "Z",
-            f"left_seam_Z_{(patch1.d-1)//2}",
+            f"seam_Z_{i}",
         )
-    )
-    right_seam_z_checks = [
-        Check(
-            frozenset([patch2.qubit_from_coord(0, i),
-                        patch2.qubit_from_coord(0, i+1),
-                        seam.data_qubits()[i],
-                            seam.data_qubits()[i+1]]),
-            "Z",
-            f"right_seam_Z_{i//2}",
-        )
-        for i in range(1, patch2.d-1, 2)
+        for i, (q1, q2) in enumerate(boundary_pairs)
     ]
-    right_seam_z_checks.append(
-        Check(
-            frozenset([patch2.qubit_from_coord(0, 0),
-                        seam.data_qubits()[0]]),
-            "Z",
-            f"right_seam_Z_{(patch2.d-1)//2}",
-        )
-    )
-
-    # seam_x_check는 left와 right 두 종류로 이뤄져있음.
-    # left seam_x_check는 patch1.qubit_from_coord(d-1,i),patch1.qubit_from_coord(d-1,i+1), seam qubit(i), seam qubit(i+1)로 이뤄지고 i=1,3,5,...,d-2
-    # right seam_x_check는 patch2.qubit_from_coord(0,i),patch2.qubit_from_coord(0,i+1), seam qubit(i), seam qubit(i+1)로 이뤄짐. i=0,2,4,...,d-3 
-
-    left_seam_x_checks = [
-        Check(
-            frozenset([patch1.qubit_from_coord(patch1.d-1, i),
-                        patch1.qubit_from_coord(patch1.d-1, i+1),
-                        seam.data_qubits()[i],
-                            seam.data_qubits()[i+1]]),
-            "X",
-            f"left_seam_X_{(i-1)//2}",
-        )
-        for i in range(1, patch1.d-1, 2)
-    ]
-    right_seam_x_checks = [
-        Check(
-            frozenset([patch2.qubit_from_coord(0, i),
-                        patch2.qubit_from_coord(0, i+1),
-                        seam.data_qubits()[i],
-                            seam.data_qubits()[i+1]]),
-            "X",
-            f"right_seam_X_{i//2}",
-        )
-        for i in range(0, patch2.d-1, 2)
-    ]
-
-    seam_z_checks = left_seam_z_checks + right_seam_z_checks
-    seam_x_checks = left_seam_x_checks + right_seam_x_checks
-
-    merged_z_checks = patch1.z_checks() + seam_z_checks + patch2.z_checks()
-    # x_check는 기존 patch의 안쪽 boundary check들은 제외함. 여기서 boundary check라고 함은 weight-2짜리 check를 의미
-
-    merged_x_checks = []
-    for chk in patch1.x_checks():
-        if chk.label.split("_")[1] == "right":
-            continue
-        merged_x_checks.append(chk)
-    merged_x_checks += seam_x_checks
-    for chk in patch2.x_checks():
-        if chk.label.split("_")[1] == "left":
-            continue
-        merged_x_checks.append(chk)
-    
 
     return MergedPatch(
         patch1=patch1,
         patch2=patch2,
-        seam=seam,
-        merged_x_checks=merged_x_checks,
-        merged_z_checks=merged_z_checks,
+        seam_data_qubits=seam_qubits,
+        seam_x_checks=[],
+        seam_z_checks=seam_z_checks,
         name="ZZ-merged",
     )
 
@@ -359,7 +219,6 @@ def build_xx_merged(
     boundary_pairs: list[tuple[Qubit, Qubit]],
     seam_name: str = "seam",
 ) -> MergedPatch:
-    """XX logical 측정을 위한 merged code."""
     seam_qubits = [Qubit(seam_name, i) for i in range(len(boundary_pairs))]
 
     seam_x_checks = [
@@ -389,12 +248,6 @@ def surface_zz_boundary_pairs(
     patch1: RotatedSurfaceCode,
     patch2: RotatedSurfaceCode,
 ) -> list[tuple[Qubit, Qubit]]:
-    """
-    두 surface code를 left/right으로 붙이는 ZZ surgery seam.
-
-    L_Z = left column이므로, seam은 patch1 left col ↔ patch2 left col.
-    seam Z checks의 product = L_Z1 ⊗ L_Z2.
-    """
     assert patch1.d == patch2.d
     b1 = patch1.boundary_qubits("left")
     b2 = patch2.boundary_qubits("left")
@@ -405,10 +258,6 @@ def surface_xx_boundary_pairs(
     patch1: RotatedSurfaceCode,
     patch2: RotatedSurfaceCode,
 ) -> list[tuple[Qubit, Qubit]]:
-    """
-    두 surface code를 top/bottom으로 붙이는 XX surgery seam.
-    L_X = top row이므로, seam은 patch1 top row ↔ patch2 top row.
-    """
     assert patch1.d == patch2.d
     b1 = patch1.boundary_qubits("top")
     b2 = patch2.boundary_qubits("top")
@@ -424,38 +273,12 @@ def build_zz_merged_with_ancilla(
     ancilla: CodePatch,
     patch2: CodePatch,
     boundary_pairs_1to2: list[tuple[Qubit, Qubit]],
-    # (patch1_boundary_qubit, patch2_boundary_qubit) pairs
-    # ancilla qubits와 paired됨
-) -> MergedPatch:
-    """
-    Three-patch merge with ancilla code for qLDPC surgery.
-
-    The merged code consists of:
-        - patch1 (data qubits + checks)
-        - ancilla (trivial code, [[n, k=n]], data qubits only)
-        - patch2 (data qubits + checks)
-
-    Seam checks (Z-type, weight-2):
-        - Between patch1 and ancilla:  {patch1_boundary[i], ancilla[i]}
-        - Between ancilla and patch2:  {ancilla[i], patch2_boundary[i]}
-
-    Product of all seam Z checks = L_Z1 ⊗ L_Z2.
-    
-    Args:
-        patch1, patch2: Source patches
-        ancilla: Ancilla code (typically TrivialCode([[n, k=n]]))
-        boundary_pairs_1to2: List of (patch1_q, patch2_q) boundary qubit pairs
-        
-    Returns:
-        MergedPatch with ancilla as data-qubit bridge
-    """
+) -> MergedPatchWithAncilla:
     anc_qubits = ancilla.data_qubits()
     n_seam = len(boundary_pairs_1to2)
-    
-    assert len(anc_qubits) == n_seam, \
-        f"Ancilla has {len(anc_qubits)} qubits but need {n_seam} for {len(boundary_pairs_1to2)} boundary pairs"
-    
-    # No seam checks yet - ancilla qubits initialized to |0>
+
+    assert len(anc_qubits) == n_seam
+
     return MergedPatchWithAncilla(
         patch1=patch1,
         ancilla=ancilla,
@@ -471,23 +294,12 @@ def build_xx_merged_with_ancilla(
     ancilla: CodePatch,
     patch2: CodePatch,
     boundary_pairs_1to2: list[tuple[Qubit, Qubit]],
-) -> "MergedPatchWithAncilla":
-    """
-    Three-patch merge with ancilla for XX logical measurement.
-
-    Weight-2 X seam checks:
-        - Between patch1 and ancilla:  {patch1_boundary[i], ancilla[i]}
-        - Between ancilla and patch2:  {ancilla[i], patch2_boundary[i]}
-
-    Product of all seam X checks = L_X1 ⊗ L_X2.
-    """
+) -> MergedPatchWithAncilla:
     anc_qubits = ancilla.data_qubits()
     n_seam = len(boundary_pairs_1to2)
-    
-    assert len(anc_qubits) == n_seam, \
-        f"Ancilla has {len(anc_qubits)} qubits but need {n_seam}"
-    
-    # No seam checks yet - ancilla qubits initialized to |0>
+
+    assert len(anc_qubits) == n_seam
+
     return MergedPatchWithAncilla(
         patch1=patch1,
         ancilla=ancilla,
@@ -502,10 +314,6 @@ def surface_zz_boundary_pairs_with_ancilla(
     patch1: RotatedSurfaceCode,
     patch2: RotatedSurfaceCode,
 ) -> list[tuple[Qubit, Qubit]]:
-    """
-    Boundary qubit pairs for ZZ surgery with ancilla.
-    patch1 right col ↔ patch2 left col (via ancilla line).
-    """
     assert patch1.d == patch2.d
     b1 = patch1.boundary_qubits("right")
     b2 = patch2.boundary_qubits("left")
@@ -516,10 +324,6 @@ def surface_xx_boundary_pairs_with_ancilla(
     patch1: RotatedSurfaceCode,
     patch2: RotatedSurfaceCode,
 ) -> list[tuple[Qubit, Qubit]]:
-    """
-    Boundary qubit pairs for XX surgery with ancilla.
-    patch1 top row ↔ patch2 top row (via ancilla line).
-    """
     assert patch1.d == patch2.d
     b1 = patch1.boundary_qubits("top")
     b2 = patch2.boundary_qubits("top")
@@ -539,12 +343,6 @@ def build_surgery_circuit(
     p_meas: float,
     basis: str = "ZZ",
 ):
-    """
-    Full surgery circuit:
-        Phase 1 (pre):    rounds on patch1, patch2 independently
-        Phase 2 (merge):  rounds on merged patch
-        Phase 3 (final):  data measurement + OBSERVABLE_INCLUDE
-    """
     import stim
 
     if basis == "ZZ":
@@ -564,12 +362,6 @@ def build_surgery_circuit(
     circuit = stim.Circuit()
     circuit.append("R", list(range(n_total)))
 
-    # Phase 1: pre-surgery rounds (patch1, patch2 각자 stabilizer 측정)
-    # patch1만의 registry (local)
-    reg1 = patch1.make_registry()
-    reg2 = patch2.make_registry()
-
-    # Phase 1은 merged registry 기준으로 각 patch의 checks만 측정
     circuit += _measure_checks_rounds(
         checks=patch1.z_checks() if meas_basis == "Z" else patch1.x_checks(),
         reg=reg,
@@ -591,7 +383,6 @@ def build_surgery_circuit(
         phase_t_offset=0,
     )
 
-    # Phase 2: merged rounds
     merged_checks = (merged.z_checks() if meas_basis == "Z"
                      else merged.x_checks())
     circuit += _measure_checks_rounds(
@@ -605,32 +396,25 @@ def build_surgery_circuit(
         phase_t_offset=rounds,
     )
 
-    # Phase 3: final measurement
     data_indices = [reg[q] for q in merged.data_qubits()]
     circuit.append("M", data_indices)
 
-    # OBSERVABLE_INCLUDE
     lz1 = merged.patch1.z_logicals()[0]
     lz2 = merged.patch2.z_logicals()[0]
 
-    # Observable 0: ZZ surgery 결과 — Phase 2 마지막 라운드의 seam Z-check 측정들의 XOR
-    # 측정 구조: Phase2 last round = [patch1_z | seam_z | patch2_z] (n_merged_z 개)
-    # Phase 3 M(n_total) 이후 기준: rec[-(n_total + n_merged_z - si)] (si: check 인덱스)
     n_p1z = len(merged.patch1.z_checks())
     n_seam_z = len(merged.seam_z_checks())
-    n_merged_z = len(merged.z_checks())  # = n_p1z + n_seam_z + n_p2z
+    n_merged_z = len(merged.z_checks())
     seam_zz_targets = [
         stim.target_rec(-(n_total + n_merged_z - (n_p1z + i)))
         for i in range(n_seam_z)
     ]
     circuit.append("OBSERVABLE_INCLUDE", seam_zz_targets, 0)
 
-    # Observable 1: patch1 개별 Z logical — surgery 이후 +1인지 (최종 데이터 측정 기반)
     idx1 = sorted(reg[q] for q in lz1)
     targets_z1 = [stim.target_rec(-(n_total - i)) for i in idx1]
     circuit.append("OBSERVABLE_INCLUDE", targets_z1, 1)
 
-    # Observable 2: patch2 개별 Z logical — surgery 이후 +1인지 (최종 데이터 측정 기반)
     idx2 = sorted(reg[q] for q in lz2)
     targets_z2 = [stim.target_rec(-(n_total - i)) for i in idx2]
     circuit.append("OBSERVABLE_INCLUDE", targets_z2, 2)
@@ -648,18 +432,12 @@ def _measure_checks_rounds(
     data_qubit_subset: list[Qubit],
     phase_t_offset: int,
 ):
-    """
-    주어진 check list에 대해 rounds번 syndrome 측정.
-    ancilla는 임시로 data qubit 뒤에 배치 (per-call fresh ancilla).
-    """
     import stim
 
     circuit = stim.Circuit()
     n_global = len(reg)
     data_indices = [reg[q] for q in data_qubit_subset]
 
-    # ancilla: n_global 이후에 임시 배치
-    # (실제 회로에서는 ancilla를 재사용하므로, 여기선 개념적으로만)
     anc_start = n_global
     n_chks = len(checks)
 
@@ -698,3 +476,292 @@ def _measure_checks_rounds(
                                 [rec_cur, rec_prev], [ai, 0, t_abs])
 
     return circuit
+
+
+# ---------------------------------------------------------------------------
+# ConePatch: cone code construction for homological measurement
+# ---------------------------------------------------------------------------
+# 논문: "Fault-Tolerant Logical Measurements via Homological Measurement"
+#       Ide, Gowda, Nadkarni, Dauphinais (PRX 2025)
+#
+# C̃ 의 check matrix (eq.13):
+#     H̃_X = [ H_X         ]    H̃_Z = [ H_Z   f0  ]
+#            [ f1^T  ∂1^T  ]           [ ∂0        ]
+
+class ConePatch(CodePatch):
+    """
+    Cone code C̃ = cone(f) for homological measurement.
+
+    입력:
+        C1, C2   : 두 코드 패치. C = C1 ⊕ C2 로 취급.
+        A        : ancilla code (data qubits 만 가짐)
+        f1       : np.ndarray, shape (n, w), F2  — eq.35
+        f0       : np.ndarray, shape (nZ, n0Z), F2  — eq.48
+                   commutativity: H_Z @ f1 = f0 @ delta1  (mod 2)
+        delta1   : np.ndarray, shape (n0Z, w), F2  — eq.47 + Algorithm 1
+        delta0   : np.ndarray, shape (n_cyc, n0Z), F2 or None  — Algorithm 2
+    """
+
+    def __init__(
+        self,
+        C1: CodePatch,
+        C2: CodePatch,
+        A: CodePatch,
+        f1: np.ndarray,
+        f0: np.ndarray,
+        delta1: np.ndarray,
+        delta0: np.ndarray | None = None,
+        name: str = "cone",
+    ):
+        self._name = name
+        self.C1 = C1
+        self.C2 = C2
+        self.A  = A
+
+        c_qubits = C1.data_qubits() + C2.data_qubits()
+        a_qubits = A.data_qubits()
+        self._data_qubits = c_qubits + a_qubits
+
+        self._registry = QubitRegistry()
+        self._registry.register(c_qubits)
+        self._registry.register(a_qubits)
+
+        w = len(a_qubits)
+
+        # TODO: shape / commutativity 검증
+        # assert f1.shape == (len(c_qubits), w)
+        # assert (H_Z @ f1 % 2 == f0 @ delta1 % 2).all()
+        # assert delta0 is None or (delta0 @ delta1 % 2 == 0).all()
+
+        # X-checks
+        # (1) 기존 C1, C2 X-checks
+        # TODO: ZZ surgery 에서 seam 쪽 boundary X-check (weight-2) 제거 필요
+        existing_x = C1.x_checks() + C2.x_checks()
+
+        # (2) 새 X-checks: delta1 의 각 row s
+        #     C 쪽: f1 @ delta1[s,:] nonzero 위치
+        #     A 쪽: delta1[s,:] nonzero 위치
+        new_x_checks = []
+        for s in range(delta1.shape[0]):
+            c_side = (f1 @ delta1[s, :] % 2).astype(bool)
+            a_side = delta1[s, :].astype(bool)
+            qubits = frozenset(
+                [c_qubits[i] for i in np.where(c_side)[0]] +
+                [a_qubits[k] for k in np.where(a_side)[0]]
+            )
+            new_x_checks.append(Check(qubits, "X", f"cone_X_{s}"))
+
+        self._x_checks = existing_x + new_x_checks
+
+        # Z-checks
+        # (1) 기존 C Z-checks: f0 로 ancilla qubit 추가
+        c_z_checks = C1.z_checks() + C2.z_checks()
+        existing_z = []
+        for i, chk in enumerate(c_z_checks):
+            extra = frozenset(a_qubits[k] for k in np.where(f0[i, :].astype(bool))[0])
+            existing_z.append(Check(chk.qubits | extra, "Z", chk.label))
+
+        # (2) 새 Z-checks: delta0 의 각 row (A 쪽만)
+        new_z_checks = []
+        if delta0 is not None:
+            for c in range(delta0.shape[0]):
+                a_side = delta0[c, :].astype(bool)
+                qubits = frozenset(a_qubits[k] for k in np.where(a_side)[0])
+                new_z_checks.append(Check(qubits, "Z", f"cone_Z_{c}"))
+
+        self._z_checks = existing_z + new_z_checks
+
+        self._x_logicals = C1.x_logicals() + C2.x_logicals()
+        self._z_logicals = C1.z_logicals() + C2.z_logicals()
+
+    @property
+    def name(self) -> str: return self._name
+
+    def data_qubits(self) -> list[Qubit]: return self._data_qubits
+    def x_checks(self)   -> list[Check]:  return self._x_checks
+    def z_checks(self)   -> list[Check]:  return self._z_checks
+    def x_logicals(self):                 return self._x_logicals
+    def z_logicals(self):                 return self._z_logicals
+    def make_registry(self) -> QubitRegistry: return self._registry
+
+    def h_x_tilde(self) -> np.ndarray:
+        """H̃_X = [H_X | 0 ; f1^T | ∂1^T]"""
+        # TODO
+        raise NotImplementedError
+
+    def h_z_tilde(self) -> np.ndarray:
+        """H̃_Z = [H_Z | f0 ; ∂0 | 0]"""
+        # TODO
+        raise NotImplementedError
+
+
+# ---------------------------------------------------------------------------
+# ZZ surgery 용 ConePatch builder
+# ---------------------------------------------------------------------------
+
+def build_zz_cone(
+    C1: CodePatch,
+    C2: CodePatch,
+    A: CodePatch,
+    f1: np.ndarray,
+    f0: np.ndarray,
+    delta1: np.ndarray,
+    delta0: np.ndarray | None = None,
+) -> ConePatch:
+    """
+    f1, f0, delta1, delta0 를 직접 받아 ConePatch 생성.
+    자동 계산이 필요하면 compute_zz_cone_maps() 사용.
+    """
+    return ConePatch(C1, C2, A, f1, f0, delta1, delta0, name="ZZ-cone")
+
+
+def compute_zz_cone_maps(
+    C1: CodePatch,
+    C2: CodePatch,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    ZZ surgery 에 필요한 f1, f0, delta1, delta0 자동 계산.
+    논문 eq.35, 47, 48 → Algorithm 1 → Algorithm 2 순서.
+    Returns: (f1, f0, delta1, delta0)
+    """
+    c1_qubits = C1.data_qubits()
+    c2_qubits = C2.data_qubits()
+    n1 = len(c1_qubits)
+    n2 = len(c2_qubits)
+    n  = n1 + n2
+
+    reg1 = C1.make_registry()
+    reg2 = C2.make_registry()
+
+    Hz1 = C1.h_z(reg1)
+    Hz2 = C2.h_z(reg2)
+    nZ1, nZ2 = Hz1.shape[0], Hz2.shape[0]
+    nZ = nZ1 + nZ2
+
+    Hz = np.zeros((nZ, n), dtype=np.uint8)
+    Hz[:nZ1, :n1] = Hz1
+    Hz[nZ1:, n1:] = Hz2
+
+    xl1 = C1.x_logicals()[0]
+    xl2 = C2.x_logicals()[0]
+    Q_indices = (
+        sorted(reg1[q] for q in xl1) +
+        sorted(n1 + reg2[q] for q in xl2)
+    )
+    w = len(Q_indices)
+
+    # f1: eq.35
+    f1 = np.zeros((n, w), dtype=np.uint8)
+    for j, i in enumerate(Q_indices):
+        f1[i, j] = 1
+
+    # delta1*, f0*: eq.47, 48
+    Hz_Q = Hz[:, Q_indices]
+    nonzero_rows = [i for i in range(nZ) if Hz_Q[i].any()]
+    n0Z = len(nonzero_rows)
+
+    delta1 = Hz_Q[nonzero_rows, :]
+
+    f0 = np.zeros((nZ, n0Z), dtype=np.uint8)
+    for j, i in enumerate(nonzero_rows):
+        f0[i, j] = 1
+
+    # Algorithm 1
+    delta1 = _algorithm1(delta1)
+
+    n_new_edges = delta1.shape[0] - n0Z
+    if n_new_edges > 0:
+        f0 = np.hstack([f0, np.zeros((nZ, n_new_edges), dtype=np.uint8)])
+
+    # Algorithm 2
+    delta0 = _algorithm2(delta1, Hz, f0)
+
+    return f1, f0, delta1, delta0
+
+
+def _algorithm1(delta1: np.ndarray) -> np.ndarray:
+    """Cheeger constant >= 1 이 될 때까지 edge 추가."""
+    delta1 = delta1.copy()
+    while True:
+        h, S = _cheeger_constant(delta1)
+        if h >= 1:
+            break
+        w = delta1.shape[1]
+        Sc = [v for v in range(w) if v not in S]
+        deg = delta1.sum(axis=0)
+        best_h = -1
+        best_edge = None
+        for v1 in sorted(S, key=lambda v: deg[v]):
+            for v2 in sorted(Sc, key=lambda v: deg[v]):
+                new_row = np.zeros(w, dtype=np.uint8)
+                new_row[v1] = 1
+                new_row[v2] = 1
+                candidate = np.vstack([delta1, new_row])
+                h_new, _ = _cheeger_constant(candidate)
+                if h_new > best_h:
+                    best_h = h_new
+                    best_edge = new_row
+                    if h_new >= 1:
+                        break
+            if best_h >= 1:
+                break
+        delta1 = np.vstack([delta1, best_edge])
+    return delta1
+
+
+def _cheeger_constant(delta1: np.ndarray) -> tuple[float, list[int]]:
+    from itertools import combinations
+    w = delta1.shape[1]
+    best_h = float('inf')
+    best_S = []
+    for size in range(1, w // 2 + 1):
+        for S in combinations(range(w), size):
+            S_set = set(S)
+            boundary = 0
+            for row in delta1:
+                support = set(np.where(row)[0])
+                if len(support & S_set) % 2 == 1:
+                    boundary += 1
+            h = boundary / len(S)
+            if h < best_h:
+                best_h = h
+                best_S = list(S)
+    return best_h, best_S
+
+
+def _algorithm2(
+    delta1: np.ndarray,
+    Hz: np.ndarray,
+    f0: np.ndarray,
+) -> np.ndarray:
+    """cycle basis (∂0) 계산. ker delta0 ≅ im delta1."""
+    n0Z = delta1.shape[0]
+    cycle_basis = _f2_null_space(delta1.T)
+    if cycle_basis.shape[0] == 0:
+        return np.zeros((0, n0Z), dtype=np.uint8)
+    return cycle_basis.astype(np.uint8)
+
+
+def _f2_null_space(M: np.ndarray) -> np.ndarray:
+    """F2 위에서 M 의 null space basis (rows = basis vectors)."""
+    M = M.copy().astype(np.uint8) % 2
+    m, n = M.shape
+    aug = np.hstack([M, np.eye(n, dtype=np.uint8)])
+    pivot_cols = []
+    row = 0
+    for col in range(m):
+        pivot = None
+        for r in range(row, n):
+            if aug[r, col]:
+                pivot = r
+                break
+        if pivot is None:
+            continue
+        aug[[row, pivot]] = aug[[pivot, row]]
+        for r in range(n):
+            if r != row and aug[r, col]:
+                aug[r] = (aug[r] + aug[row]) % 2
+        pivot_cols.append(col)
+        row += 1
+    null_basis = aug[len(pivot_cols):, m:]
+    return null_basis % 2
