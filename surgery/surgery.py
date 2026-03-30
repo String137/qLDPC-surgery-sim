@@ -478,6 +478,33 @@ def _measure_checks_rounds(
     return circuit
 
 
+class DirectSum(CodePatch):
+    """두 코드 패치의 direct sum. check는 단순히 합집합."""
+
+    def __init__(self, patch1: CodePatch, patch2: CodePatch, name: str = "direct-sum"):
+        self._name = name
+        self.patch1 = patch1
+        self.patch2 = patch2
+
+        self._x_checks = patch1.x_checks() + patch2.x_checks()
+        self._z_checks = patch1.z_checks() + patch2.z_checks()
+        
+        self._registry = QubitRegistry()
+        self._registry.register(patch1.data_qubits())
+        self._registry.register(patch2.data_qubits())
+
+    @property
+    def name(self): return self._name
+
+    def data_qubits(self) -> list[Qubit]:
+        return self.patch1.data_qubits() + self.patch2.data_qubits()
+
+    def x_checks(self) -> list[Check]: return self._x_checks
+    def z_checks(self) -> list[Check]: return self._z_checks
+    def make_registry(self) -> QubitRegistry:
+        return self._registry
+
+
 # ---------------------------------------------------------------------------
 # ConePatch: cone code construction for homological measurement
 # ---------------------------------------------------------------------------
@@ -486,7 +513,7 @@ def _measure_checks_rounds(
 #
 # C̃ 의 check matrix (eq.13):
 #     H̃_X = [ H_X         ]    H̃_Z = [ H_Z   f0  ]
-#            [ f1^T  ∂1^T  ]           [ ∂0        ]
+#           [ f1^T  ∂1^T  ]          [       ∂0  ]
 
 class ConePatch(CodePatch):
     """
@@ -497,9 +524,9 @@ class ConePatch(CodePatch):
         A        : ancilla code (data qubits 만 가짐)
         f1       : np.ndarray, shape (n, w), F2  — eq.35
         f0       : np.ndarray, shape (nZ, n0Z), F2  — eq.48
-                   commutativity: H_Z @ f1 = f0 @ delta1  (mod 2)
-        delta1   : np.ndarray, shape (n0Z, w), F2  — eq.47 + Algorithm 1
-        delta0   : np.ndarray, shape (n_cyc, n0Z), F2 or None  — Algorithm 2
+                   commutativity: H_Z @ f1 = f0 @ partial1  (mod 2)
+        partial1   : np.ndarray, shape (n0Z, w), F2  — eq.47 + Algorithm 1
+        partial0   : np.ndarray, shape (n_cyc, n0Z), F2 or None  — Algorithm 2
     """
 
     def __init__(
@@ -509,8 +536,8 @@ class ConePatch(CodePatch):
         A: CodePatch,
         f1: np.ndarray,
         f0: np.ndarray,
-        delta1: np.ndarray,
-        delta0: np.ndarray | None = None,
+        partial1: np.ndarray,
+        partial0: np.ndarray | None = None,
         name: str = "cone",
     ):
         self._name = name
@@ -518,7 +545,9 @@ class ConePatch(CodePatch):
         self.C2 = C2
         self.A  = A
 
-        c_qubits = C1.data_qubits() + C2.data_qubits()
+        direct_sum = DirectSum(C1, C2)
+        c_qubits = direct_sum.data_qubits()
+
         a_qubits = A.data_qubits()
         self._data_qubits = c_qubits + a_qubits
 
@@ -542,9 +571,9 @@ class ConePatch(CodePatch):
         #     C 쪽: f1 @ delta1[s,:] nonzero 위치
         #     A 쪽: delta1[s,:] nonzero 위치
         new_x_checks = []
-        for s in range(delta1.shape[0]):
-            c_side = (f1 @ delta1[s, :] % 2).astype(bool)
-            a_side = delta1[s, :].astype(bool)
+        for s in range(partial1.shape[0]):
+            c_side = (f1 @ partial1[s, :] % 2).astype(bool)
+            a_side = partial1[s, :].astype(bool)
             qubits = frozenset(
                 [c_qubits[i] for i in np.where(c_side)[0]] +
                 [a_qubits[k] for k in np.where(a_side)[0]]
@@ -561,11 +590,11 @@ class ConePatch(CodePatch):
             extra = frozenset(a_qubits[k] for k in np.where(f0[i, :].astype(bool))[0])
             existing_z.append(Check(chk.qubits | extra, "Z", chk.label))
 
-        # (2) 새 Z-checks: delta0 의 각 row (A 쪽만)
+        # (2) 새 Z-checks: partial0 의 각 row (A 쪽만)
         new_z_checks = []
-        if delta0 is not None:
-            for c in range(delta0.shape[0]):
-                a_side = delta0[c, :].astype(bool)
+        if partial0 is not None:
+            for c in range(partial0.shape[0]):
+                a_side = partial0[c, :].astype(bool)
                 qubits = frozenset(a_qubits[k] for k in np.where(a_side)[0])
                 new_z_checks.append(Check(qubits, "Z", f"cone_Z_{c}"))
 
@@ -587,6 +616,7 @@ class ConePatch(CodePatch):
     def h_x_tilde(self) -> np.ndarray:
         """H̃_X = [H_X | 0 ; f1^T | ∂1^T]"""
         # TODO
+        # 굳이 구현 안해도 될 듯. x_checks()에서 이미 implicit하게 표현되어 있음.
         raise NotImplementedError
 
     def h_z_tilde(self) -> np.ndarray:

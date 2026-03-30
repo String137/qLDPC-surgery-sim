@@ -36,11 +36,15 @@ class CodePatch(ABC):
     @abstractmethod
     def z_checks(self) -> list[Check]: ...
 
-    @abstractmethod
-    def x_logicals(self) -> list[frozenset[Qubit]]: ...
+    # @abstractmethod
+    # def x_logicals(self) -> list[frozenset[Qubit]]: ...
 
-    @abstractmethod
-    def z_logicals(self) -> list[frozenset[Qubit]]: ...
+    # @abstractmethod
+    # def z_logicals(self) -> list[frozenset[Qubit]]: ...
+
+    # logical operators는 직접 구현하자.
+    # check 만족하는 operator 찾으면 되고, 원하는 logical operator를 고정시키고, 남은 operator를 찾는 부분도 만들자.
+
 
     # -- gauge (default: same as stabilizer) ---------------------------------
     def gauge_x_checks(self) -> list[Check]:
@@ -172,6 +176,96 @@ class CodePatch(ABC):
                 circuit.append("OBSERVABLE_INCLUDE", targets, li)
 
         return circuit
+
+
+# ---------------------------------------------------------------------------
+# Surface Code
+# ---------------------------------------------------------------------------
+
+
+class SurfaceCode(CodePatch):
+    # See surface_lattice.jpg
+    # 총 d^2+(d-1)^2= 2d^2-2d+1 qubits
+    # (x,y) = (n,m), where n,m is half integer, and n+m is an integer, and 0 <= n,m <= d-1
+
+    def __init__(self, d: int, patch_name: str = "surf", offset=(0.0, 0.0)):
+        self.d = d
+        self._name = patch_name
+        self._offset = offset
+        self._build()
+    
+    @property
+    def name(self) -> str:
+        return self._name
+    
+    def _coord_to_idx(self, x: float, y: float) -> int:
+        # (x,y) 좌표 → qubit index
+        assert (x + y) % 1 == 0, "x+y must be an integer"
+        assert 0 <= x <= self.d - 1 and 0 <= y <= self.d - 1, "x and y must be in [0, d-1]"
+        assert (2 * x) % 1 == 0 and (2 * y) % 1 == 0, "x and y must be half-integers"
+        # x: 오른쪽으로 증가, y: 아래로 증가
+        # index는 y=0부터 x=0..d-1, y=0.5부터 x=0.5..d-1.5, y=1부터 x=0..d-1, ... 순서로 매겨짐.
+        if y % 1 == 0:
+            idx = int(y * (2 * self.d-1) + x)
+        else:
+            idx = int((y-0.5) * (2 * self.d-1) + self.d + x)
+        return idx
+    def _q(self, x: float, y: float) -> Qubit:
+        # (x,y) local 좌표에 있는 qubit을 생성.
+        idx = self._coord_to_idx(x, y)
+        return Qubit(self._name, idx, (x, y))
+    
+    def _idx_to_coord(self, idx: int) -> tuple[float, float]:
+        # idx로부터 (x,y) 좌표 계산
+        y = (idx // (2 * self.d - 1))
+        x = idx % (2 * self.d - 1)
+        if x >= self.d:
+            x -= self.d
+            y += 0.5
+        return (x, y)
+    
+    def _get_qubit_from_idx(self, idx: int) -> Qubit:
+        # idx로부터 Qubit 객체 반환
+        return self._data_qubits[idx]  # 이미 생성된 qubit 객체 반환
+    def _get_qubit_from_coord(self, x: float, y: float) -> Qubit:
+        idx = self._coord_to_idx(x, y)
+        return self._get_qubit_from_idx(idx)
+    
+    def _build(self):
+        # x: 오른쪽, y: 아래로 증가
+        total_num_qubits = 2 * self.d**2 - 2 * self.d + 1
+        self._data_qubits = [Qubit(self._name, idx, self._idx_to_coord(idx))
+                             for idx in range(total_num_qubits)]
+
+        self._x_checks: list[Check] = []
+        self._z_checks: list[Check] = []
+
+        # check의 좌표는 (x,y), where x+y = integer + 0.5꼴
+        # y가 정수이면 X-check, y가 반정수이면 Z-check
+
+        # check 좌표 (x,y)에 대해 상하좌우로 0.5씩 떨어진 qubit들이 (있다면) check의 support가 됨.
+
+        for y in range(0, self.d-0.5, 0.5):
+            # 이거 float로 range 안된대
+            for x in range(0, self.d-0.5, 0.5):
+                if (x + y) % 1 == 0.5:
+                    # check 좌표 (x,y)
+                    chk_qubits = []
+                    for dx, dy in [[-0.5, 0], [0.5, 0], [0, -0.5], [0, 0.5]]:
+                        qx = x + dx
+                        qy = y + dy
+                        if 0 <= qx <= self.d - 1 and 0 <= qy <= self.d - 1:
+                            chk_qubits.append(self._get_qubit_from_coord(qx, qy))
+                    chk_qubits = frozenset(chk_qubits)
+                    if y % 1 == 0:   # y가 정수 → X-check
+                        self._x_checks.append(Check(chk_qubits, "X", f"X_{x}_{y}"))
+                    else:            # y가 반정수 → Z-check
+                        self._z_checks.append(Check(chk_qubits, "Z", f"Z_{x}_{y}"))
+    
+    # -- CodePatch interface -------------------------------------------------
+    def data_qubits(self) -> list[Qubit]: return self._data_qubits
+    def x_checks(self) -> list[Check]:    return self._x_checks
+    def z_checks(self) -> list[Check]:    return self._z_checks
 
 
 # ---------------------------------------------------------------------------

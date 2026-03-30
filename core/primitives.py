@@ -51,10 +51,19 @@ class Check:
 
     def __repr__(self):
         qs = sorted(self.qubits)
-        return f"{self.pauli}[{self.label}]({qs})"
+        return f"{self.pauli}({qs})"
 
     def weight(self) -> int:
         return len(self.qubits)
+
+    def __add__(self, other: Check) -> Check:
+        """두 check의 합 (mod 2)."""
+        if self.pauli != other.pauli:
+            # CSS code가 아닌 경우를 지원하려면 Check 클래스 구조를 바꿔야함.
+            raise NotImplementedError("Cannot add checks of different Pauli types.")
+        new_qubits = (self.qubits - other.qubits) | (other.qubits - self.qubits)
+        new_label = f"({self.label}+{other.label})"
+        return Check(frozenset(new_qubits), self.pauli, new_label)
 
 
 # ---------------------------------------------------------------------------
