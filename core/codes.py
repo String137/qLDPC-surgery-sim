@@ -25,6 +25,8 @@ class CodePatch(ABC):
     def __init__(self, offset=(0.0, 0.0)):
         self._offset = offset    # (float, float)
         self.css = None
+        self._data_qubits = None
+        
     @property
     @abstractmethod
     def name(self) -> str: ...
@@ -95,6 +97,21 @@ class CodePatch(ABC):
             self.make_css()
         return self.css.k
     
+    def add_qubit(self, x, y) -> Qubit:
+        # qubit 추가 (data qubits에 추가)
+        # check 업데이트는 외부에서 직접 해줘야 함.
+        self._data_qubits.append(Qubit(self.name, len(self._data_qubits), (x, y)))
+        return self._data_qubits[-1]
+    
+    def add_check(self, qubits: list[Qubit], pauli: str, label: str = "") -> Check:
+        chk = Check(frozenset(qubits), pauli, label)
+        if pauli == "X":
+            self._x_checks.append(chk)
+        elif pauli == "Z":
+            self._z_checks.append(chk)
+        else:
+            raise ValueError("pauli must be 'X' or 'Z'")
+        return chk
 
     def to_stim_circuit(
         self,
@@ -196,6 +213,23 @@ class CodePatch(ABC):
                 circuit.append("OBSERVABLE_INCLUDE", targets, li)
 
         return circuit
+
+
+class EmptyPatch(CodePatch):
+    def __init__(self, patch_name: str = "empty", offset=(0.0, 0.0)):
+        super().__init__(offset)
+        self._name = patch_name
+        self._data_qubits = []
+        self._x_checks = []
+        self._z_checks = []
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def data_qubits(self) -> list[Qubit]: return self._data_qubits
+    def x_checks(self) -> list[Check]:    return self._x_checks
+    def z_checks(self) -> list[Check]:    return self._z_checks
 
 
 # ---------------------------------------------------------------------------

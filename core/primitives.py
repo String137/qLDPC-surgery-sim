@@ -62,11 +62,18 @@ class Check:
     def __add__(self, other: Check) -> Check:
         """두 check의 합 (mod 2)."""
         if self.pauli != other.pauli:
-            # CSS code가 아닌 경우를 지원하려면 Check 클래스 구조를 바꿔야함.
-            raise NotImplementedError("Cannot add checks of different Pauli types.")
+            if self.pauli == "Empty" and other.pauli != "Empty":
+                pauli = other.pauli
+            elif self.pauli != "Empty" and other.pauli == "Empty":
+                pauli = self.pauli
+            else:
+                # CSS code가 아닌 경우를 지원하려면 Check 클래스 구조를 바꿔야함.
+                raise NotImplementedError("Cannot add checks of different Pauli types.")
+        else:
+            pauli = self.pauli
         new_qubits = (self.qubits - other.qubits) | (other.qubits - self.qubits)
         new_label = f"({self.label}+{other.label})"
-        return Check(frozenset(new_qubits), self.pauli, new_label)
+        return Check(frozenset(new_qubits), pauli, new_label)
 
 
 # ---------------------------------------------------------------------------

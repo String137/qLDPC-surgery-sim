@@ -1,2 +1,2 @@
 from .primitives import Qubit, Check, QubitRegistry
-from .codes import CodePatch, RotatedSurfaceCode, TrivialCode, SurfaceCode
+from .codes import CodePatch, RotatedSurfaceCode, EmptyPatch, TrivialCode, SurfaceCode

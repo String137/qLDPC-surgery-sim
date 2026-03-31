@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import numpy as np
 from core.primitives import Qubit, Check, QubitRegistry
-from core.codes import CodePatch, RotatedSurfaceCode, TrivialCode
+from core.codes import CodePatch, RotatedSurfaceCode, EmptyPatch, TrivialCode, SurfaceCode
 
 
 # ---------------------------------------------------------------------------
@@ -535,10 +535,8 @@ class ConePatch(CodePatch):
         C1: CodePatch,
         C2: CodePatch,
         A: CodePatch,
-        f1: np.ndarray,
-        f0: np.ndarray,
-        partial1t: np.ndarray,
-        partial0: np.ndarray | None = None,
+        f1t: list[Check],
+        f0: list[Check],
         name: str = "cone",
     ):
         self._name = name
@@ -556,53 +554,29 @@ class ConePatch(CodePatch):
         self._registry.register(c_qubits)
         self._registry.register(a_qubits)
 
-        w = len(a_qubits)
+        self.patch_name_dict = {
+            C1.name: C1,
+            C2.name: C2,
+            A.name: A
+        }
 
-        # TODO: shape / commutativity 검증
-        # assert f1.shape == (len(c_qubits), w)
-        # assert (H_Z @ f1 % 2 == f0 @ delta1 % 2).all()
-        # assert delta0 is None or (delta0 @ delta1 % 2 == 0).all()
+        partial0 = A.z_checks() if A.z_checks() else []
+        partial1t = A.x_checks() if A.x_checks() else []
 
-        # X-checks
-        # (1) 기존 C1, C2 X-checks
-        # TODO: ZZ surgery 에서 seam 쪽 boundary X-check (weight-2) 제거 필요
-        existing_x = C1.x_checks() + C2.x_checks()
+        assert len(direct_sum.z_checks()) == len(f0)
+        self._z_checks = direct_sum.z_checks()
+        for i in range(len(f0)):
+            if f0[i].weight() > 0:
+                self._z_checks[i] += f0[i]
+        for i in range(len(partial0)):
+            self._z_checks.append(partial0[i])
 
-        # (2) 새 X-checks: partial1t 의 각 row s
-        #     C 쪽: f1 @ partial1t[s,:] nonzero 위치
-        #     A 쪽: partial1t[s,:] nonzero 위치
-        new_x_checks = []
-        for s in range(partial1t.shape[0]):
-            c_side = (f1 @ partial1t[s, :] % 2).astype(bool)
-            a_side = partial1t[s, :].astype(bool)
-            qubits = frozenset(
-                [c_qubits[i] for i in np.where(c_side)[0]] +
-                [a_qubits[k] for k in np.where(a_side)[0]]
-            )
-            new_x_checks.append(Check(qubits, "X", f"cone_X_{s}"))
+        assert len(partial1t) == len(f1t)
+        self._x_checks = direct_sum.x_checks()
+        for i in range(len(f1t)):
+            self._x_checks.append(f1t[i] + partial1t[i])
 
-        self._x_checks = existing_x + new_x_checks
-
-        # Z-checks
-        # (1) 기존 C Z-checks: f0 로 ancilla qubit 추가
-        c_z_checks = C1.z_checks() + C2.z_checks()
-        existing_z = []
-        for i, chk in enumerate(c_z_checks):
-            extra = frozenset(a_qubits[k] for k in np.where(f0[i, :].astype(bool))[0])
-            existing_z.append(Check(chk.qubits | extra, "Z", chk.label))
-
-        # (2) 새 Z-checks: partial0 의 각 row (A 쪽만)
-        new_z_checks = []
-        if partial0 is not None:
-            for c in range(partial0.shape[0]):
-                a_side = partial0[c, :].astype(bool)
-                qubits = frozenset(a_qubits[k] for k in np.where(a_side)[0])
-                new_z_checks.append(Check(qubits, "Z", f"cone_Z_{c}"))
-
-        self._z_checks = existing_z + new_z_checks
-
-        self._x_logicals = C1.x_logicals() + C2.x_logicals()
-        self._z_logicals = C1.z_logicals() + C2.z_logicals()
+        
 
     @property
     def name(self) -> str: return self._name
@@ -614,6 +588,15 @@ class ConePatch(CodePatch):
     def z_logicals(self):                 return self._z_logicals
     def make_registry(self) -> QubitRegistry: return self._registry
 
+    def local_coord(self, q: Qubit) -> tuple[float, float]:
+        # ConePatch에서의 local_coord
+        lx, ly = q._local_coord()
+        ox, oy = self.patch_name_dict[q.patch_name]._offset
+        return lx + ox, ly + oy
+
+    def get_idx(self, q: Qubit) -> int:
+        return self._registry[q]
+
     def h_x_tilde(self) -> np.ndarray:
         """H̃_X = [H_X | 0 ; f1^T | ∂1^T]"""
         # TODO
@@ -624,6 +607,32 @@ class ConePatch(CodePatch):
         """H̃_Z = [H_Z | f0 ; ∂0 | 0]"""
         # TODO
         raise NotImplementedError
+
+
+def build_xx_cone_surface(d: int) -> ConePatch:
+    C1 = SurfaceCode(d, patch_name="surf1", offset=(0.0,0.0))
+    C2 = SurfaceCode(d, patch_name="surf2", offset=(d,0.0))
+    A  = EmptyPatch(patch_name="ancilla", offset=(d-0.5,0.5))
+
+    for i in range(d-1):
+        A.add_qubit(0, i)
+    A.add_check([A.data_qubits()[0]], "X")
+    for i in range(1,d-1):
+        A.add_check([A.data_qubits()[i-1], A.data_qubits()[i]], "X")
+    A.add_check([A.data_qubits()[d-2]], "X")
+
+    f0 = [Check.get_empty_check()]*len(C1.z_checks()+C2.z_checks())
+    for i in range(d-1):
+        f0[i*d + (d-1)] = Check(frozenset([A.data_qubits()[i]]), "Z")
+    for i in range(d-1):
+        f0[len(C1.z_checks()) + i*d] = Check(frozenset([A.data_qubits()[i]]), "Z")
+    
+    f1t = [Check.get_empty_check()]*len(A.x_checks())
+    for i in range(d):
+        f1t[i] = Check(frozenset([C1._get_qubit_from_coord(d-1,i), C2._get_qubit_from_coord(0,i)]), "X")
+    
+
+    return ConePatch(C1, C2, A, f1t, f0, name="xx-cone-surface")
 
 
 # ---------------------------------------------------------------------------
