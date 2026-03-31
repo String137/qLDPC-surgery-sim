@@ -519,13 +519,14 @@ class ConePatch(CodePatch):
     """
     Cone code C̃ = cone(f) for homological measurement.
 
+    partial1대신 transpose된 partial1t를 쓸거임. shape도 고쳐주길 바람.
     입력:
         C1, C2   : 두 코드 패치. C = C1 ⊕ C2 로 취급.
         A        : ancilla code (data qubits 만 가짐)
         f1       : np.ndarray, shape (n, w), F2  — eq.35
         f0       : np.ndarray, shape (nZ, n0Z), F2  — eq.48
                    commutativity: H_Z @ f1 = f0 @ partial1  (mod 2)
-        partial1   : np.ndarray, shape (n0Z, w), F2  — eq.47 + Algorithm 1
+        partial1t   : np.ndarray, shape (w, n0Z), F2  — eq.47 + Algorithm 1
         partial0   : np.ndarray, shape (n_cyc, n0Z), F2 or None  — Algorithm 2
     """
 
@@ -536,7 +537,7 @@ class ConePatch(CodePatch):
         A: CodePatch,
         f1: np.ndarray,
         f0: np.ndarray,
-        partial1: np.ndarray,
+        partial1t: np.ndarray,
         partial0: np.ndarray | None = None,
         name: str = "cone",
     ):
@@ -567,13 +568,13 @@ class ConePatch(CodePatch):
         # TODO: ZZ surgery 에서 seam 쪽 boundary X-check (weight-2) 제거 필요
         existing_x = C1.x_checks() + C2.x_checks()
 
-        # (2) 새 X-checks: delta1 의 각 row s
-        #     C 쪽: f1 @ delta1[s,:] nonzero 위치
-        #     A 쪽: delta1[s,:] nonzero 위치
+        # (2) 새 X-checks: partial1t 의 각 row s
+        #     C 쪽: f1 @ partial1t[s,:] nonzero 위치
+        #     A 쪽: partial1t[s,:] nonzero 위치
         new_x_checks = []
-        for s in range(partial1.shape[0]):
-            c_side = (f1 @ partial1[s, :] % 2).astype(bool)
-            a_side = partial1[s, :].astype(bool)
+        for s in range(partial1t.shape[0]):
+            c_side = (f1 @ partial1t[s, :] % 2).astype(bool)
+            a_side = partial1t[s, :].astype(bool)
             qubits = frozenset(
                 [c_qubits[i] for i in np.where(c_side)[0]] +
                 [a_qubits[k] for k in np.where(a_side)[0]]

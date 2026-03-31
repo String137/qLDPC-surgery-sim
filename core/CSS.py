@@ -21,7 +21,9 @@ class CSS:
         self.k = self.calculate_k()
         self.logical_x_repr = []    # X logical representatives
         self.logical_z_repr = []    # Z logical representatives
-
+        self.d = None
+        self.dx = None
+        self.dz = None
 
 
     def get_center(self,):
@@ -132,6 +134,11 @@ class CSS:
         self.dz = self._find_min_op_weight("Z")
         self.d = min(self.dx,self.dz)
         return self.d
+
+    def get_distance(self,):
+        if self.dx is None or self.dz is None:
+            self.calculate_distance()
+        return self.dx, self.dz
 
 #####################
 

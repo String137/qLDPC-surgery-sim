@@ -47,7 +47,10 @@ class Check:
     label: str = ""
 
     def __post_init__(self):
-        assert self.pauli in ("X", "Z")
+        assert self.pauli in ("X", "Z", "Empty")
+
+    def get_empty_check() -> Check:
+        return Check(frozenset([]), "Empty")
 
     def __repr__(self):
         qs = sorted(self.qubits)

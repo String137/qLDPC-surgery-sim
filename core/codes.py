@@ -13,8 +13,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 import numpy as np
 from core.primitives import Qubit, Check, QubitRegistry
-
-
+from docplex.mp.model import Model
+from docplex.mp.progress import ProgressClock
+from core.CSS import CSS
+import galois
 # ---------------------------------------------------------------------------
 # CodePatch interface
 # ---------------------------------------------------------------------------
@@ -22,7 +24,7 @@ from core.primitives import Qubit, Check, QubitRegistry
 class CodePatch(ABC):
     def __init__(self, offset=(0.0, 0.0)):
         self._offset = offset    # (float, float)
-    
+        self.css = None
     @property
     @abstractmethod
     def name(self) -> str: ...
@@ -75,6 +77,24 @@ class CodePatch(ABC):
     def check_commutativity(self) -> bool:
         reg = self.make_registry()
         return np.all((self.h_x(reg) @ self.h_z(reg).T) % 2 == 0)
+
+    def make_css(self):
+        reg = self.make_registry()
+        Gx = galois.GF(2)(self.h_x(reg) )
+        Gz = galois.GF(2)(self.h_z(reg) )
+        self.css = CSS(Gx, Gz)
+        return self
+    
+    def get_distance(self) -> tuple[int, int]:
+        if self.css is None:
+            self.make_css()
+        self.dx, self.dz = self.css.get_distance()
+        return self.dx, self.dz
+    def get_k(self) -> int:
+        if self.css is None:
+            self.make_css()
+        return self.css.k
+    
 
     def to_stim_circuit(
         self,
@@ -208,8 +228,9 @@ class SurfaceCode(CodePatch):
         if y % 1 == 0:
             idx = int(y * (2 * self.d-1) + x)
         else:
-            idx = int((y-0.5) * (2 * self.d-1) + self.d + x)
+            idx = int((y-0.5) * (2 * self.d-1) + self.d + x - 0.5)
         return idx
+    
     def _q(self, x: float, y: float) -> Qubit:
         # (x,y) local 좌표에 있는 qubit을 생성.
         idx = self._coord_to_idx(x, y)
@@ -221,6 +242,7 @@ class SurfaceCode(CodePatch):
         x = idx % (2 * self.d - 1)
         if x >= self.d:
             x -= self.d
+            x += 0.5
             y += 0.5
         return (x, y)
     
@@ -245,11 +267,11 @@ class SurfaceCode(CodePatch):
 
         # check 좌표 (x,y)에 대해 상하좌우로 0.5씩 떨어진 qubit들이 (있다면) check의 support가 됨.
 
-        for y in range(0, self.d-0.5, 0.5):
-            # 이거 float로 range 안된대
-            for x in range(0, self.d-0.5, 0.5):
+        for yy in range(0, 2*self.d-1):
+            for xx in range(0, 2*self.d-1):
+                x = float(xx)/2
+                y = float(yy)/2
                 if (x + y) % 1 == 0.5:
-                    # check 좌표 (x,y)
                     chk_qubits = []
                     for dx, dy in [[-0.5, 0], [0.5, 0], [0, -0.5], [0, 0.5]]:
                         qx = x + dx
