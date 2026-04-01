@@ -26,6 +26,7 @@ class CodePatch(ABC):
         self._offset = offset    # (float, float)
         self.css = None
         self._data_qubits = None
+        self.check2coord = None
         
     @property
     @abstractmethod
@@ -112,107 +113,115 @@ class CodePatch(ABC):
         else:
             raise ValueError("pauli must be 'X' or 'Z'")
         return chk
+    
+    def get_idx(self, qubit: Qubit) -> int:
+        # qubit index 반환 (data qubits 기준)
+        return self.data_qubits().index(qubit)
+    
+    def set_check2coord(self, check2coord: dict):
+        # check2coord는 check → (x,y) 좌표 매핑. surgery에서 ancilla 배치할 때 필요.
+        self.check2coord = check2coord
+    
+    # def to_stim_circuit(
+    #     self,
+    #     *,
+    #     reg: QubitRegistry,
+    #     rounds: int,
+    #     p_data: float,
+    #     p_meas: float,
+    #     basis: str = "Z",           # "X", "Z", "both"
+    #     first_round: bool = True,
+    #     last_round: bool = False,
+    # ):
+    #     """
+    #     주어진 QubitRegistry 기준으로 stim circuit 생성.
+    #     reg는 외부에서 주입 — merged code일 때 global registry 공유.
+    #     """
+    #     import stim
 
-    def to_stim_circuit(
-        self,
-        *,
-        reg: QubitRegistry,
-        rounds: int,
-        p_data: float,
-        p_meas: float,
-        basis: str = "Z",           # "X", "Z", "both"
-        first_round: bool = True,
-        last_round: bool = False,
-    ):
-        """
-        주어진 QubitRegistry 기준으로 stim circuit 생성.
-        reg는 외부에서 주입 — merged code일 때 global registry 공유.
-        """
-        import stim
+    #     do_x = basis in ("X", "both")
+    #     do_z = basis in ("Z", "both")
 
-        do_x = basis in ("X", "both")
-        do_z = basis in ("Z", "both")
+    #     x_chks = self.x_checks() if do_x else []
+    #     z_chks = self.z_checks() if do_z else []
 
-        x_chks = self.x_checks() if do_x else []
-        z_chks = self.z_checks() if do_z else []
+    #     n_data = len(reg)
+    #     # ancilla indices: data qubits 이후에 배치
+    #     # X ancillas: n_data .. n_data + len(x_chks) - 1
+    #     # Z ancillas: n_data + len(x_chks) .. end
+    #     x_anc = list(range(n_data, n_data + len(x_chks)))
+    #     z_anc = list(range(n_data + len(x_chks),
+    #                        n_data + len(x_chks) + len(z_chks)))
 
-        n_data = len(reg)
-        # ancilla indices: data qubits 이후에 배치
-        # X ancillas: n_data .. n_data + len(x_chks) - 1
-        # Z ancillas: n_data + len(x_chks) .. end
-        x_anc = list(range(n_data, n_data + len(x_chks)))
-        z_anc = list(range(n_data + len(x_chks),
-                           n_data + len(x_chks) + len(z_chks)))
+    #     circuit = stim.Circuit()
 
-        circuit = stim.Circuit()
+    #     if first_round:
+    #         all_qubits = list(range(n_data + len(x_chks) + len(z_chks)))
+    #         circuit.append("R", all_qubits)
 
-        if first_round:
-            all_qubits = list(range(n_data + len(x_chks) + len(z_chks)))
-            circuit.append("R", all_qubits)
+    #     prev_x_meas_count = 0
+    #     prev_z_meas_count = 0
 
-        prev_x_meas_count = 0
-        prev_z_meas_count = 0
+    #     for t in range(rounds):
+    #         # Data errors
+    #         if p_data > 0:
+    #             data_indices = list(range(n_data))
+    #             circuit.append("X_ERROR", data_indices, p_data)
+    #             circuit.append("Z_ERROR", data_indices, p_data)
 
-        for t in range(rounds):
-            # Data errors
-            if p_data > 0:
-                data_indices = list(range(n_data))
-                circuit.append("X_ERROR", data_indices, p_data)
-                circuit.append("Z_ERROR", data_indices, p_data)
+    #         # -- X stabilizers -----------------------------------------------
+    #         if do_x:
+    #             circuit.append("R", x_anc)
+    #             for ai, chk in enumerate(x_chks):
+    #                 anc = x_anc[ai]
+    #                 circuit.append("H", [anc])
+    #                 for q in sorted(reg.check_to_indices(chk)):
+    #                     circuit.append("CNOT", [anc, q])
+    #                 circuit.append("H", [anc])
+    #             if p_meas > 0:
+    #                 circuit.append("X_ERROR", x_anc, p_meas)
+    #             circuit.append("M", x_anc)
 
-            # -- X stabilizers -----------------------------------------------
-            if do_x:
-                circuit.append("R", x_anc)
-                for ai, chk in enumerate(x_chks):
-                    anc = x_anc[ai]
-                    circuit.append("H", [anc])
-                    for q in sorted(reg.check_to_indices(chk)):
-                        circuit.append("CNOT", [anc, q])
-                    circuit.append("H", [anc])
-                if p_meas > 0:
-                    circuit.append("X_ERROR", x_anc, p_meas)
-                circuit.append("M", x_anc)
+    #             for ai in range(len(x_chks)):
+    #                 rec_cur = stim.target_rec(-(len(x_chks) - ai))
+    #                 if t == 0:
+    #                     circuit.append("DETECTOR", [rec_cur], [ai, 0, t])
+    #                 else:
+    #                     rec_prev = stim.target_rec(
+    #                         -(len(x_chks) - ai) - len(x_chks))
+    #                     circuit.append("DETECTOR",
+    #                                    [rec_cur, rec_prev], [ai, 0, t])
 
-                for ai in range(len(x_chks)):
-                    rec_cur = stim.target_rec(-(len(x_chks) - ai))
-                    if t == 0:
-                        circuit.append("DETECTOR", [rec_cur], [ai, 0, t])
-                    else:
-                        rec_prev = stim.target_rec(
-                            -(len(x_chks) - ai) - len(x_chks))
-                        circuit.append("DETECTOR",
-                                       [rec_cur, rec_prev], [ai, 0, t])
+    #         # -- Z stabilizers -----------------------------------------------
+    #         if do_z:
+    #             circuit.append("R", z_anc)
+    #             for ai, chk in enumerate(z_chks):
+    #                 anc = z_anc[ai]
+    #                 for q in sorted(reg.check_to_indices(chk)):
+    #                     circuit.append("CNOT", [q, anc])
+    #             if p_meas > 0:
+    #                 circuit.append("X_ERROR", z_anc, p_meas)
+    #             circuit.append("M", z_anc)
 
-            # -- Z stabilizers -----------------------------------------------
-            if do_z:
-                circuit.append("R", z_anc)
-                for ai, chk in enumerate(z_chks):
-                    anc = z_anc[ai]
-                    for q in sorted(reg.check_to_indices(chk)):
-                        circuit.append("CNOT", [q, anc])
-                if p_meas > 0:
-                    circuit.append("X_ERROR", z_anc, p_meas)
-                circuit.append("M", z_anc)
+    #             for ai in range(len(z_chks)):
+    #                 rec_cur = stim.target_rec(-(len(z_chks) - ai))
+    #                 if t == 0:
+    #                     circuit.append("DETECTOR", [rec_cur], [ai, 1, t])
+    #                 else:
+    #                     rec_prev = stim.target_rec(
+    #                         -(len(z_chks) - ai) - len(z_chks))
+    #                     circuit.append("DETECTOR",
+    #                                    [rec_cur, rec_prev], [ai, 1, t])
 
-                for ai in range(len(z_chks)):
-                    rec_cur = stim.target_rec(-(len(z_chks) - ai))
-                    if t == 0:
-                        circuit.append("DETECTOR", [rec_cur], [ai, 1, t])
-                    else:
-                        rec_prev = stim.target_rec(
-                            -(len(z_chks) - ai) - len(z_chks))
-                        circuit.append("DETECTOR",
-                                       [rec_cur, rec_prev], [ai, 1, t])
+    #     if last_round:
+    #         data_indices = list(range(n_data))
+    #         circuit.append("M", data_indices)
+    #         for li, support in enumerate(self.z_logicals()):
+    #             indices = sorted(reg[q] for q in support)
+    #             targets = [stim.target_rec(-(n_data - i)) for i in indices]
+    #             circuit.append("OBSERVABLE_INCLUDE", targets, li)
 
-        if last_round:
-            data_indices = list(range(n_data))
-            circuit.append("M", data_indices)
-            for li, support in enumerate(self.z_logicals()):
-                indices = sorted(reg[q] for q in support)
-                targets = [stim.target_rec(-(n_data - i)) for i in indices]
-                circuit.append("OBSERVABLE_INCLUDE", targets, li)
-
-        return circuit
+    #     return circuit
 
 
 class EmptyPatch(CodePatch):
@@ -300,7 +309,7 @@ class SurfaceCode(CodePatch):
         # y가 정수이면 X-check, y가 반정수이면 Z-check
 
         # check 좌표 (x,y)에 대해 상하좌우로 0.5씩 떨어진 qubit들이 (있다면) check의 support가 됨.
-
+        check2coord = {} # check → (x,y) 좌표 매핑. surgery에서 ancilla 배치할 때 필요.
         for yy in range(0, 2*self.d-1):
             for xx in range(0, 2*self.d-1):
                 x = float(xx)/2
@@ -317,7 +326,8 @@ class SurfaceCode(CodePatch):
                         self._x_checks.append(Check(chk_qubits, "X", f"X_{x}_{y}"))
                     else:            # y가 반정수 → Z-check
                         self._z_checks.append(Check(chk_qubits, "Z", f"Z_{x}_{y}"))
-    
+                    check2coord[self._x_checks[-1] if y % 1 == 0 else self._z_checks[-1]] = (x, y)
+        self.set_check2coord(check2coord)
     # -- CodePatch interface -------------------------------------------------
     def data_qubits(self) -> list[Qubit]: return self._data_qubits
     def x_checks(self) -> list[Check]:    return self._x_checks

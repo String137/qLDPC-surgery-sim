@@ -16,35 +16,234 @@ import tqecd
 import argparse
 from collections import defaultdict
 from core.primitives import Qubit, Check, QubitRegistry
-from core.codes import RotatedSurfaceCode
-from surgery.surgery_circuit import SurgeryCircuitBuilder
+from core.codes import CodePatch, EmptyPatch, SurfaceCode
+import numpy as np
+from collections import defaultdict
+# from surgery.surgery_circuit import SurgeryCircuitBuilder
 
+# surgery_circuit.py는 안 쓰는 방향으로..
 
-def edge_color_restricted(checks: list[Check], restrict_qubits: set) -> dict:
-    check_used: dict[int, set] = defaultdict(set)
-    qubit_used: dict[Qubit, set] = defaultdict(set)
-    coloring: dict = {}
-    for ci, chk in enumerate(checks):
-        for q in sorted(chk.qubits, key=lambda x: x.idx):
-            if q not in restrict_qubits:
+# Single-code memory experiments 예시부터 들어보자.
+# LRC 방식으로 구현할 거임.
+
+class LRCCircuitBuilder:
+    def __init__(self, patch: CodePatch, rounds: int, p_data: float, p_meas: float):
+        self.patch = patch
+        self.rounds = rounds
+        self.p_data = p_data
+        self.p_meas = p_meas
+        self.left = None
+        self.right = None
+        self.check_idx = {chk: i for i, chk in enumerate(patch.z_checks() + patch.x_checks())}
+        self.ancilla_coord = None # syndrome meas를 위한 ancilla들의 좌표. List의 idx번째 원소가 좌표.
+
+    def find_partition(self,):
+        raise NotImplementedError
+    
+    def set_partition(self, left: list[int]):
+        self.left = left
+        self.right = [i for i in range(self.patch.n_qubits()) if i not in left]
+
+    def set_check_idx(self, check_idx: dict):
+        self.check_idx = check_idx
+    
+    def set_ancilla_coord(self, ancilla_coord: list[tuple[float, float]]):
+        self.ancilla_coord = ancilla_coord
+    def set_default_ancilla_coord(self,):
+        # check_idx에 따라 ancilla_coord 자동으로 설정
+        ancilla_coord = [None] * len(self.check_idx)
+        for chk, idx in self.check_idx.items():
+            if self.patch.check2coord is None:
+                raise ValueError("patch.check2coord is not set. Cannot set default ancilla coordinates. Please set patch.check2coord first.")
+            coord = self.patch.check2coord[chk]
+            ancilla_coord[idx] = coord
+        self.ancilla_coord = ancilla_coord
+
+    def edge_coloring(self, support: list[Qubit]|list[int], pauli: str, existing_coloring: dict | None = None) -> dict:
+        # only for bipartite graph
+        assert pauli in ("X", "Z")
+        chk_mat = self.patch.h_x() if pauli == "X" else self.patch.h_z()
+        support_idx = (
+            [self.patch.get_idx(qubit=q) for q in support]
+            if isinstance(support[0], Qubit) else list(support)
+        )
+        chk_mat_restricted = chk_mat[:, support_idx]
+        print(chk_mat_restricted)
+        n_checks, n_qubits = chk_mat_restricted.shape
+
+        edges = [
+            (i, j)
+            for i in range(n_checks)
+            for j in range(n_qubits)
+            if chk_mat_restricted[i, j]
+        ]
+        edge_index = {(i, j): idx for idx, (i, j) in enumerate(edges)}
+
+        color = [-1] * len(edges)
+        check_colors = [dict() for _ in range(n_checks)]  # check_colors[i] = {c: local_j}
+        qubit_colors  = [dict() for _ in range(n_qubits)]  # qubit_colors[j] = {c: check_i}
+
+        # 기존 coloring 로드
+        support_inv = {orig: local for local, orig in enumerate(support_idx)}
+        if existing_coloring:
+            for c, edge_list in existing_coloring.items():
+                for (i, orig_j) in edge_list:
+                    if orig_j not in support_inv:
+                        continue
+                    j = support_inv[orig_j]
+                    if (i, j) not in edge_index:
+                        continue
+                    eidx = edge_index[(i, j)]
+                    color[eidx] = c
+                    check_colors[i][c] = j
+                    qubit_colors[j][c] = i
+
+        existing_max = max(existing_coloring.keys()) + 1 if existing_coloring else 0
+        raw_delta = max(
+            int(chk_mat_restricted.sum(axis=1).max()) if n_checks else 0,
+            int(chk_mat_restricted.sum(axis=0).max()) if n_qubits else 0,
+        )
+        delta = max(raw_delta, existing_max) + 1
+
+        def find_free_color(used: dict) -> int:
+            for c in range(delta + 1):
+                if c not in used:
+                    return c
+
+        def augment(start_check, c1, c2):
+            # c1-c2 augmenting path를 먼저 수집
+            path = []  # (check_i, qubit_j, current_color) 순서로
+            u = start_check
+            visited = set()
+            while True:
+                if u in visited:
+                    break
+                visited.add(u)
+                if c2 not in check_colors[u]:
+                    break
+                j = check_colors[u][c2]
+                path.append((u, j, c2))  # edge (u,j)의 색을 c2 → c1으로
+                if c1 not in qubit_colors[j]:
+                    break
+                i = qubit_colors[j][c1]
+                path.append((i, j, c1))  # edge (i,j)의 색을 c1 → c2로
+                u = i
+
+            # 수집한 path를 한꺼번에 swap
+            for u, j, old_c in path:
+                new_c = c1 if old_c == c2 else c2
+                eidx = edge_index[(u, j)]
+                color[eidx] = new_c
+                del check_colors[u][old_c]
+                check_colors[u][new_c] = j
+                del qubit_colors[j][old_c]
+                qubit_colors[j][new_c] = u
+
+        for idx, (i, j) in enumerate(edges):
+            if color[idx] != -1:
                 continue
-            used = check_used[ci] | qubit_used[q]
-            c = 0
-            while c in used:
-                c += 1
-            coloring[(ci, q)] = c
-            check_used[ci].add(c)
-            qubit_used[q].add(c)
-    return coloring
+            c1 = find_free_color(check_colors[i])
+            c2 = find_free_color(qubit_colors[j])
+            if c1 == c2:
+                color[idx] = c1
+                check_colors[i][c1] = j
+                qubit_colors[j][c1] = i
+            else:
+                augment(i, c1, c2)
+                # augment 후 i에서 c2가 비어있음이 보장됨
+                color[idx] = c2
+                check_colors[i][c2] = j
+                qubit_colors[j][c2] = i
 
+        result = defaultdict(list)
+        for idx, (i, j) in enumerate(edges):
+            result[color[idx]].append((i, support_idx[j]))
+        return dict(result)
+            
+        
+    def build(self,):
+        if self.left == None or self.right == None:
+            # self.find_partition()
+            self.set_partition()
+        if self.ancilla_coord is None:
+            try:
+                self.set_default_ancilla_coord()
+            except ValueError as e:
+                print(f"Error setting default ancilla coordinates: {e}")
+                raise ValueError("Ancilla coordinates are not set. Please set them manually or ensure patch.check2coord is set for default coordinate assignment.")
+        
+        # make Stim circuit
+        # TODO: 밑에 코드 그렇게 신뢰하지는 말 것. 다시 내가 짜자.
+        left = self.left
+        right = self.right
 
-def n_colors(col: dict) -> int:
-    return max(col.values()) + 1 if col else 0
+        # Phase 1: LZ coloring
+        lz_coloring = self.edge_coloring(support=left, pauli="Z")
+        t2 = max(lz_coloring.keys()) + 1 if lz_coloring else 0
 
+        # Phase 2: LX, RZ coloring (동시 실행, time step 공유)
+        lx_coloring = self.edge_coloring(support=left, pauli="X")
+        rz_coloring = self.edge_coloring(support=right, pauli="Z")
+        t1 = max(
+            max(lx_coloring.keys()) + 1 if lx_coloring else 0,
+            max(rz_coloring.keys()) + 1 if rz_coloring else 0,
+        )
+        # phase 2의 time step을 phase 1 이후로 offset
+        lx_coloring = {c + t2: edges for c, edges in lx_coloring.items()}
+        rz_coloring = {c + t2: edges for c, edges in rz_coloring.items()}
 
-def cb_left(q: Qubit, d: int, global_col_offset: int) -> bool:
-    row, col = divmod(q.idx, d)
-    return (col + global_col_offset + row) % 2 == 0
+        # Phase 3: RX coloring (phase 2 이후)
+        rx_coloring = self.edge_coloring(support=right, pauli="X")
+        rx_coloring = {c + t2 + t1: edges for c, edges in rx_coloring.items()}
+
+        # 전체 CNOT schedule 합치기
+        # {time_step: [(check_i, qubit_idx), ...]}
+        cnot_schedule = {}
+        for coloring in [lz_coloring, lx_coloring, rz_coloring, rx_coloring]:
+            for t, edges in coloring.items():
+                cnot_schedule.setdefault(t, []).extend(edges)
+
+        total_depth = t2 + t1 + t2  # LZ + (LX||RZ) + RX
+        # 논문 eq(6): t = t1 + t2 + 2 (prepare/measure 포함)
+
+        # Stim 회로 생성
+        circuit = stim.Circuit()
+
+        for r in range(self.rounds):
+            # Z ancilla prepare
+            # stim.Circuit에 Z ancilla들 |0> prepare 추가
+            # ancilla qubit index: self.check_idx[chk] (z_checks 먼저)
+            # coordinate: self.ancilla_coord[self.check_idx[chk]]
+            # TODO: patch.z_checks()로 Z ancilla qubit index 목록 구성 후 R 게이트 추가
+
+            # X ancilla prepare
+            # stim.Circuit에 X ancilla들 |+> prepare 추가
+            # TODO: patch.x_checks()로 X ancilla qubit index 목록 구성 후 RX 게이트 추가
+
+            for t in sorted(cnot_schedule.keys()):
+                for (check_row_idx, qubit_idx) in cnot_schedule[t]:
+                    # check_row_idx: h_z() 또는 h_x()의 행 인덱스
+                    # qubit_idx: data qubit의 patch 전체 기준 인덱스
+                    # time step t가 어느 phase인지에 따라 CNOT 방향 결정
+                    # Z check: data → ancilla (CX: data control, ancilla target)
+                    # X check: ancilla → data (CX: ancilla control, data target)
+                    # TODO: check_row_idx → ancilla stim qubit index 변환 후 CX 추가
+                    # TODO: qubit_idx → data qubit stim qubit index 변환 후 CX 추가
+                    pass
+
+                # TICK 추가
+                circuit.append("TICK", [])
+
+            # Z ancilla measure
+            # TODO: patch.z_checks()로 Z ancilla 측정 후 detector 추가
+
+            # X ancilla measure
+            # TODO: patch.x_checks()로 X ancilla 측정 후 detector 추가
+
+        return circuit
+        
+        
+
 
 
 class SurgeryCircuitCL:

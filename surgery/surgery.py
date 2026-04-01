@@ -104,7 +104,7 @@ class MergedPatch(CodePatch):
 # MergedPatchWithAncilla
 # ---------------------------------------------------------------------------
 
-class MergedPatchWithAncilla(CodePatch):
+# class MergedPatchWithAncilla(CodePatch):
     """
     Three-way merge: patch1 ↔ ancilla ↔ patch2
     """
@@ -186,148 +186,148 @@ class MergedPatchWithAncilla(CodePatch):
 # ZZ / XX seam builder
 # ---------------------------------------------------------------------------
 
-def build_zz_merged(
-    patch1: CodePatch,
-    patch2: CodePatch,
-    boundary_pairs: list[tuple[Qubit, Qubit]],
-    seam_name: str = "seam",
-) -> MergedPatch:
-    seam_qubits = [Qubit(seam_name, i) for i in range(len(boundary_pairs))]
+# def build_zz_merged(
+#     patch1: CodePatch,
+#     patch2: CodePatch,
+#     boundary_pairs: list[tuple[Qubit, Qubit]],
+#     seam_name: str = "seam",
+# ) -> MergedPatch:
+#     seam_qubits = [Qubit(seam_name, i) for i in range(len(boundary_pairs))]
 
-    seam_z_checks = [
-        Check(
-            frozenset([q1, seam_qubits[i], q2]),
-            "Z",
-            f"seam_Z_{i}",
-        )
-        for i, (q1, q2) in enumerate(boundary_pairs)
-    ]
+#     seam_z_checks = [
+#         Check(
+#             frozenset([q1, seam_qubits[i], q2]),
+#             "Z",
+#             f"seam_Z_{i}",
+#         )
+#         for i, (q1, q2) in enumerate(boundary_pairs)
+#     ]
 
-    return MergedPatch(
-        patch1=patch1,
-        patch2=patch2,
-        seam_data_qubits=seam_qubits,
-        seam_x_checks=[],
-        seam_z_checks=seam_z_checks,
-        name="ZZ-merged",
-    )
+#     return MergedPatch(
+#         patch1=patch1,
+#         patch2=patch2,
+#         seam_data_qubits=seam_qubits,
+#         seam_x_checks=[],
+#         seam_z_checks=seam_z_checks,
+#         name="ZZ-merged",
+#     )
 
 
-def build_xx_merged(
-    patch1: CodePatch,
-    patch2: CodePatch,
-    boundary_pairs: list[tuple[Qubit, Qubit]],
-    seam_name: str = "seam",
-) -> MergedPatch:
-    seam_qubits = [Qubit(seam_name, i) for i in range(len(boundary_pairs))]
+# def build_xx_merged(
+#     patch1: CodePatch,
+#     patch2: CodePatch,
+#     boundary_pairs: list[tuple[Qubit, Qubit]],
+#     seam_name: str = "seam",
+# ) -> MergedPatch:
+#     seam_qubits = [Qubit(seam_name, i) for i in range(len(boundary_pairs))]
 
-    seam_x_checks = [
-        Check(
-            frozenset([q1, seam_qubits[i], q2]),
-            "X",
-            f"seam_X_{i}",
-        )
-        for i, (q1, q2) in enumerate(boundary_pairs)
-    ]
+#     seam_x_checks = [
+#         Check(
+#             frozenset([q1, seam_qubits[i], q2]),
+#             "X",
+#             f"seam_X_{i}",
+#         )
+#         for i, (q1, q2) in enumerate(boundary_pairs)
+#     ]
 
-    return MergedPatch(
-        patch1=patch1,
-        patch2=patch2,
-        seam_data_qubits=seam_qubits,
-        seam_x_checks=seam_x_checks,
-        seam_z_checks=[],
-        name="XX-merged",
-    )
+#     return MergedPatch(
+#         patch1=patch1,
+#         patch2=patch2,
+#         seam_data_qubits=seam_qubits,
+#         seam_x_checks=seam_x_checks,
+#         seam_z_checks=[],
+#         name="XX-merged",
+#     )
 
 
 # ---------------------------------------------------------------------------
 # Surface code seam helper
 # ---------------------------------------------------------------------------
 
-def surface_zz_boundary_pairs(
-    patch1: RotatedSurfaceCode,
-    patch2: RotatedSurfaceCode,
-) -> list[tuple[Qubit, Qubit]]:
-    assert patch1.d == patch2.d
-    b1 = patch1.boundary_qubits("left")
-    b2 = patch2.boundary_qubits("left")
-    return list(zip(b1, b2))
+# def surface_zz_boundary_pairs(
+#     patch1: RotatedSurfaceCode,
+#     patch2: RotatedSurfaceCode,
+# ) -> list[tuple[Qubit, Qubit]]:
+#     assert patch1.d == patch2.d
+#     b1 = patch1.boundary_qubits("left")
+#     b2 = patch2.boundary_qubits("left")
+#     return list(zip(b1, b2))
 
 
-def surface_xx_boundary_pairs(
-    patch1: RotatedSurfaceCode,
-    patch2: RotatedSurfaceCode,
-) -> list[tuple[Qubit, Qubit]]:
-    assert patch1.d == patch2.d
-    b1 = patch1.boundary_qubits("top")
-    b2 = patch2.boundary_qubits("top")
-    return list(zip(b1, b2))
+# def surface_xx_boundary_pairs(
+#     patch1: RotatedSurfaceCode,
+#     patch2: RotatedSurfaceCode,
+# ) -> list[tuple[Qubit, Qubit]]:
+#     assert patch1.d == patch2.d
+#     b1 = patch1.boundary_qubits("top")
+#     b2 = patch2.boundary_qubits("top")
+#     return list(zip(b1, b2))
 
 
 # ---------------------------------------------------------------------------
 # Merge with Ancilla Code (TrivialCode)
 # ---------------------------------------------------------------------------
 
-def build_zz_merged_with_ancilla(
-    patch1: CodePatch,
-    ancilla: CodePatch,
-    patch2: CodePatch,
-    boundary_pairs_1to2: list[tuple[Qubit, Qubit]],
-) -> MergedPatchWithAncilla:
-    anc_qubits = ancilla.data_qubits()
-    n_seam = len(boundary_pairs_1to2)
+# def build_zz_merged_with_ancilla(
+#     patch1: CodePatch,
+#     ancilla: CodePatch,
+#     patch2: CodePatch,
+#     boundary_pairs_1to2: list[tuple[Qubit, Qubit]],
+# ) -> MergedPatchWithAncilla:
+#     anc_qubits = ancilla.data_qubits()
+#     n_seam = len(boundary_pairs_1to2)
 
-    assert len(anc_qubits) == n_seam
+#     assert len(anc_qubits) == n_seam
 
-    return MergedPatchWithAncilla(
-        patch1=patch1,
-        ancilla=ancilla,
-        patch2=patch2,
-        seam_x_checks=[],
-        seam_z_checks=[],
-        name="ZZ-merged-ancilla",
-    )
-
-
-def build_xx_merged_with_ancilla(
-    patch1: CodePatch,
-    ancilla: CodePatch,
-    patch2: CodePatch,
-    boundary_pairs_1to2: list[tuple[Qubit, Qubit]],
-) -> MergedPatchWithAncilla:
-    anc_qubits = ancilla.data_qubits()
-    n_seam = len(boundary_pairs_1to2)
-
-    assert len(anc_qubits) == n_seam
-
-    return MergedPatchWithAncilla(
-        patch1=patch1,
-        ancilla=ancilla,
-        patch2=patch2,
-        seam_x_checks=[],
-        seam_z_checks=[],
-        name="XX-merged-ancilla",
-    )
+#     return MergedPatchWithAncilla(
+#         patch1=patch1,
+#         ancilla=ancilla,
+#         patch2=patch2,
+#         seam_x_checks=[],
+#         seam_z_checks=[],
+#         name="ZZ-merged-ancilla",
+#     )
 
 
-def surface_zz_boundary_pairs_with_ancilla(
-    patch1: RotatedSurfaceCode,
-    patch2: RotatedSurfaceCode,
-) -> list[tuple[Qubit, Qubit]]:
-    assert patch1.d == patch2.d
-    b1 = patch1.boundary_qubits("right")
-    b2 = patch2.boundary_qubits("left")
-    return list(zip(b1, b2))
+# def build_xx_merged_with_ancilla(
+#     patch1: CodePatch,
+#     ancilla: CodePatch,
+#     patch2: CodePatch,
+#     boundary_pairs_1to2: list[tuple[Qubit, Qubit]],
+# ) -> MergedPatchWithAncilla:
+#     anc_qubits = ancilla.data_qubits()
+#     n_seam = len(boundary_pairs_1to2)
+
+#     assert len(anc_qubits) == n_seam
+
+#     return MergedPatchWithAncilla(
+#         patch1=patch1,
+#         ancilla=ancilla,
+#         patch2=patch2,
+#         seam_x_checks=[],
+#         seam_z_checks=[],
+#         name="XX-merged-ancilla",
+#     )
 
 
-def surface_xx_boundary_pairs_with_ancilla(
-    patch1: RotatedSurfaceCode,
-    patch2: RotatedSurfaceCode,
-) -> list[tuple[Qubit, Qubit]]:
-    assert patch1.d == patch2.d
-    b1 = patch1.boundary_qubits("top")
-    b2 = patch2.boundary_qubits("top")
-    return list(zip(b1, b2))
+# def surface_zz_boundary_pairs_with_ancilla(
+#     patch1: RotatedSurfaceCode,
+#     patch2: RotatedSurfaceCode,
+# ) -> list[tuple[Qubit, Qubit]]:
+#     assert patch1.d == patch2.d
+#     b1 = patch1.boundary_qubits("right")
+#     b2 = patch2.boundary_qubits("left")
+#     return list(zip(b1, b2))
+
+
+# def surface_xx_boundary_pairs_with_ancilla(
+#     patch1: RotatedSurfaceCode,
+#     patch2: RotatedSurfaceCode,
+# ) -> list[tuple[Qubit, Qubit]]:
+#     assert patch1.d == patch2.d
+#     b1 = patch1.boundary_qubits("top")
+#     b2 = patch2.boundary_qubits("top")
+#     return list(zip(b1, b2))
 
 
 # ---------------------------------------------------------------------------
