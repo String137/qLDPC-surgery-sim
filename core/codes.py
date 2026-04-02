@@ -41,6 +41,9 @@ class CodePatch(ABC):
     @abstractmethod
     def z_checks(self) -> list[Check]: ...
 
+    @abstractmethod
+    def local_coord(self, q: Qubit) -> tuple[float, float]: ...
+
     # @abstractmethod
     # def x_logicals(self) -> list[frozenset[Qubit]]: ...
 
@@ -289,6 +292,9 @@ class SurfaceCode(CodePatch):
             y += 0.5
         return (x, y)
     
+    def local_coord(self, q):
+        return q.local_coord
+
     def _get_qubit_from_idx(self, idx: int) -> Qubit:
         # idx로부터 Qubit 객체 반환
         return self._data_qubits[idx]  # 이미 생성된 qubit 객체 반환

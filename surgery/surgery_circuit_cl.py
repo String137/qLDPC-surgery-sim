@@ -161,91 +161,149 @@ class LRCCircuitBuilder:
         return dict(result)
             
         
-    def build(self,):
-        if self.left == None or self.right == None:
-            # self.find_partition()
-            self.set_partition()
+    def build(self):
+
+        # TODO: 아래는 build_round만 짠거임.
+        # 1. build_init(): 데이터 qubit |0> 준비 후 LRC cycle 1회 실행
+        #    - 첫 syndrome을 reference syndrome으로 사용 (모두 +1 아닐 수 있음)
+        #    - logical |0> 초기화 시 logical Z measurement 포함
+        # 2. build_round(): 한 라운드 LRC EC 회로 (Z/X ancilla 엇갈린 스케줄)
+        #    - rounds번 수동으로 이어붙임 (파이프라인 구조라 단순 *n 불가)
+        # 3. build_final(): 마지막 라운드 마무리 + logical observable 설정
+        # 4. 셋 이어붙여서 반환
+
+        if self.left is None or self.right is None:
+            raise ValueError("Please set partition")
         if self.ancilla_coord is None:
             try:
                 self.set_default_ancilla_coord()
             except ValueError as e:
-                print(f"Error setting default ancilla coordinates: {e}")
-                raise ValueError("Ancilla coordinates are not set. Please set them manually or ensure patch.check2coord is set for default coordinate assignment.")
-        
-        # make Stim circuit
-        # TODO: 밑에 코드 그렇게 신뢰하지는 말 것. 다시 내가 짜자.
+                raise ValueError("Ancilla coordinates are not set. Please set them manually or ensure patch.check2coord is set.") from e
+
         left = self.left
         right = self.right
 
-        # Phase 1: LZ coloring
-        lz_coloring = self.edge_coloring(support=left, pauli="Z")
-        t2 = max(lz_coloring.keys()) + 1 if lz_coloring else 0
+        n_data = self.patch.n_qubits()
+        n_z = len(self.patch.z_checks())
+        n_x = len(self.patch.x_checks())
 
-        # Phase 2: LX, RZ coloring (동시 실행, time step 공유)
+        # qubit 번호 계산
+        def z_ancilla(check_i): return n_data + check_i
+        def x_ancilla(check_i): return n_data + n_z + check_i
+        
+        z_ancilla_qubits = list(range(n_data, n_data + n_z))
+        x_ancilla_qubits = list(range(n_data + n_z, n_data + n_z + n_x))
+
+        # edge coloring
+        lz_coloring = self.edge_coloring(support=left, pauli="Z")
         lx_coloring = self.edge_coloring(support=left, pauli="X")
         rz_coloring = self.edge_coloring(support=right, pauli="Z")
-        t1 = max(
-            max(lx_coloring.keys()) + 1 if lx_coloring else 0,
-            max(rz_coloring.keys()) + 1 if rz_coloring else 0,
-        )
-        # phase 2의 time step을 phase 1 이후로 offset
-        lx_coloring = {c + t2: edges for c, edges in lx_coloring.items()}
-        rz_coloring = {c + t2: edges for c, edges in rz_coloring.items()}
-
-        # Phase 3: RX coloring (phase 2 이후)
         rx_coloring = self.edge_coloring(support=right, pauli="X")
-        rx_coloring = {c + t2 + t1: edges for c, edges in rx_coloring.items()}
 
-        # 전체 CNOT schedule 합치기
-        # {time_step: [(check_i, qubit_idx), ...]}
-        cnot_schedule = {}
-        for coloring in [lz_coloring, lx_coloring, rz_coloring, rx_coloring]:
-            for t, edges in coloring.items():
-                cnot_schedule.setdefault(t, []).extend(edges)
+        tlz = max(lz_coloring.keys()) + 1 if lz_coloring else 0
+        tlx = max(lx_coloring.keys()) + 1 if lx_coloring else 0
+        trz = max(rz_coloring.keys()) + 1 if rz_coloring else 0
+        trx = max(rx_coloring.keys()) + 1 if rx_coloring else 0
+        t1 = max(tlx, trz)
+        t2 = max(tlz, trx)
 
-        total_depth = t2 + t1 + t2  # LZ + (LX||RZ) + RX
-        # 논문 eq(6): t = t1 + t2 + 2 (prepare/measure 포함)
+        t_per_round = t1 + t2 + 2
 
-        # Stim 회로 생성
+        # t=0: Z ancilla reset
+        # t=1~t2: LZ CNOT (data → Z ancilla)
+        # t=t2: X ancilla reset (X basis)
+        # t=t2+1...t2+t1에는 LX (ancilla → data) + RZ (data → ancilla) CNOT
+        # t=t2+t1+1에는 Z ancilla measure
+        # t=t2+t1+1...t2+t1+t2에는 RX (ancilla → data) CNOT
+        # t=t2+t1+t2+1에는 X ancilla measure
+
         circuit = stim.Circuit()
 
-        for r in range(self.rounds):
-            # Z ancilla prepare
-            # stim.Circuit에 Z ancilla들 |0> prepare 추가
-            # ancilla qubit index: self.check_idx[chk] (z_checks 먼저)
-            # coordinate: self.ancilla_coord[self.check_idx[chk]]
-            # TODO: patch.z_checks()로 Z ancilla qubit index 목록 구성 후 R 게이트 추가
+        for i in range(n_data):
+            coord = self.patch.local_coord(self.patch._get_qubit_from_idx(i))
+            circuit.append("QUBIT_COORDS", [i], coord)
+        for check_i in range(n_z):
+            coord = self.ancilla_coord[check_i]
+            circuit.append("QUBIT_COORDS", [z_ancilla(check_i)], coord)
+        for check_i in range(n_x):
+            coord = self.ancilla_coord[n_z + check_i]
+            circuit.append("QUBIT_COORDS", [x_ancilla(check_i)], coord)
+        schedule = {}
 
-            # X ancilla prepare
-            # stim.Circuit에 X ancilla들 |+> prepare 추가
-            # TODO: patch.x_checks()로 X ancilla qubit index 목록 구성 후 RX 게이트 추가
+        def add(t, gate, targets):
+            schedule.setdefault(t, []).append((gate, targets))
 
-            for t in sorted(cnot_schedule.keys()):
-                for (check_row_idx, qubit_idx) in cnot_schedule[t]:
-                    # check_row_idx: h_z() 또는 h_x()의 행 인덱스
-                    # qubit_idx: data qubit의 patch 전체 기준 인덱스
-                    # time step t가 어느 phase인지에 따라 CNOT 방향 결정
-                    # Z check: data → ancilla (CX: data control, ancilla target)
-                    # X check: ancilla → data (CX: ancilla control, data target)
-                    # TODO: check_row_idx → ancilla stim qubit index 변환 후 CX 추가
-                    # TODO: qubit_idx → data qubit stim qubit index 변환 후 CX 추가
-                    pass
+        # t=0: Z ancilla reset
+        add(0, "R", z_ancilla_qubits)
 
-                # TICK 추가
-                circuit.append("TICK", [])
+        # t=1~t2: LZ CNOT (data → Z ancilla), 
+        for t, edges in lz_coloring.items():
+            for (check_i, qubit_j) in edges:
+                add(t + 1, "CX", [qubit_j, z_ancilla(check_i)])
 
-            # Z ancilla measure
-            # TODO: patch.z_checks()로 Z ancilla 측정 후 detector 추가
+        # X ancilla reset at t=t2+1
+        add(t2 + 1, "RX", x_ancilla_qubits)
 
-            # X ancilla measure
-            # TODO: patch.x_checks()로 X ancilla 측정 후 detector 추가
+        for round in range(self.rounds-1):
+            # Lx+Rz CNOT부터 ... Lz CNOT, X ancilla reset까지 반복
+            # LX CNOT (X ancilla → data), t=t2+2 ~ t2+1+t1
+            for t, edges in lx_coloring.items():
+                for (check_i, qubit_j) in edges:
+                    add(round * t_per_round + t2 + 2 + t, "CX", [x_ancilla(check_i), qubit_j])
 
+            # RZ CNOT (data → Z ancilla), 같은 구간
+            for t, edges in rz_coloring.items():
+                for (check_i, qubit_j) in edges:
+                    add(round * t_per_round + t2 + 2 + t, "CX", [qubit_j, z_ancilla(check_i)])
+            # RX CNOT (X ancilla → data)
+            for t, edges in rx_coloring.items():
+                for (check_i, qubit_j) in edges:
+                    add(round * t_per_round + t2 + t1 + 3 + t, "CX", [x_ancilla(check_i), qubit_j])
+            # Z ancilla measure & reset
+            add(round * t_per_round + t2 + t1 + 3, "M", z_ancilla_qubits)
+            add(round * t_per_round + t2 + t1 + 4, "R", z_ancilla_qubits)
+            # LZ CNOT (data → Z ancilla)
+            for t, edges in lz_coloring.items():
+                for (check_i, qubit_j) in edges:
+                    add(round * t_per_round + t2 + t1 + 5 + t, "CX", [qubit_j, z_ancilla(check_i)])
+            # X ancilla measure & reset
+            add(round * t_per_round + 2*t2 + t1 + 3, "M", x_ancilla_qubits)
+            add(round * t_per_round + 2*t2 + t1 + 4, "RX", x_ancilla_qubits)
+
+        # LX CNOT (X ancilla → data), 
+        for t, edges in lx_coloring.items():
+            for (check_i, qubit_j) in edges:
+                add(self.rounds * t_per_round + t2 + 2 + t, "CX", [x_ancilla(check_i), qubit_j])
+
+        # RZ CNOT (data → Z ancilla), 같은 구간
+        for t, edges in rz_coloring.items():
+            for (check_i, qubit_j) in edges:
+                add(self.rounds * t_per_round + t2 + 2 + t, "CX", [qubit_j, z_ancilla(check_i)])
+
+        # Z ancilla measure
+        add(self.rounds * t_per_round + t2 + t1 + 2, "M", z_ancilla_qubits)
+
+        # RX CNOT (X ancilla → data)
+        for t, edges in rx_coloring.items():
+            for (check_i, qubit_j) in edges:
+                add(self.rounds * t_per_round + t2 + t1 + 2 + t, "CX", [x_ancilla(check_i), qubit_j])
+
+        # X ancilla measure
+        add(self.rounds * t_per_round + 2*t2 + t1 + 2, "MX", x_ancilla_qubits)
+
+        # apply
+        for t in sorted(schedule.keys()):
+            for (gate, targets) in schedule[t]:
+                circuit.append(gate, targets)
+            circuit.append("TICK", [])
+        print(circuit)
+        with open("debug_circuit.svg", "w") as f:
+            f.write(str(circuit.diagram("timeslice-svg")))
+        # with open("debug_circuit.html", "w") as f:
+        #     f.write(circuit.diagram("timeline-3d")._repr_html_())
         return circuit
-        
-        
 
-
-
+                 
 class SurgeryCircuitCL:
     def __init__(self, d: int, rounds: int, p: float):
         self.d = d
