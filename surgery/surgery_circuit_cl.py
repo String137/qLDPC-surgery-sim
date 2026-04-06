@@ -3,11 +3,11 @@ surgery_circuit_cl.py -- ZZ surgery circuit-level noise (LRC scheduling)
 LRC order per Strikis, Browne, Beverland (arXiv:2603.05481):
   One round: LZ -> RZ+LX -> RX -> H -> M
 
-Checkerboard partition (global coords):
-  patch1: col 0..d-1
-  patch2: col d+1..2d
-  ancilla: col d
-  left if (global_col + row) % 2 == 0 else right
+Phenomenological noise model approximation:
+  - Z ancilla reset 시점에 L data qubit에 DEPOLARIZE1(p_data)
+  - X ancilla reset 시점에 R data qubit에 DEPOLARIZE1(p_data)
+  - ancilla measurement에 p_meas flip error
+  - init/final 단계에는 noise 없음
 """
 
 from __future__ import annotations
@@ -55,10 +55,13 @@ class LRCCircuitBuilder:
             ancilla_coord[idx] = coord
         self.ancilla_coord = ancilla_coord
 
-    def append_meas(self, circuit: stim.Circuit, gate: str, targets: list, label: str = None):
+    def append_meas(self, circuit: stim.Circuit, gate: str, targets: list, label: str = None, noisy: bool = False):
         assert gate in {"M", "MX", "MY", "MZ", "MR", "MRX"}
         current_tick = circuit.num_ticks
-        circuit.append(gate, targets)
+        if noisy and self.p_meas > 0:
+            circuit.append(gate, targets, self.p_meas)
+        else:
+            circuit.append(gate, targets)
         for i, tgt in enumerate(targets):
             ancilla_idx = tgt - self.n_data
             check = self.idx_to_check.get(ancilla_idx, None)
@@ -196,7 +199,6 @@ class LRCCircuitBuilder:
         def z_ancilla(check_i): return self.n_data + check_i
         def x_ancilla(check_i): return self.n_data + self.n_z + check_i
 
-        # QUBIT_COORDS
         for i in range(self.n_data):
             coord = self.patch.local_coord(self.patch._get_qubit_from_idx(i))
             circuit.append("QUBIT_COORDS", [i], coord)
@@ -205,11 +207,11 @@ class LRCCircuitBuilder:
         for check_i in range(self.n_x):
             circuit.append("QUBIT_COORDS", [x_ancilla(check_i)], self.ancilla_coord[self.n_z + check_i])
 
-        # data qubit 초기화
         circuit.append("R", list(range(self.n_data)))
         circuit.append("TICK", [])
 
-        # logical op meas
+        self.build_ec(circuit, n_rounds=1, noisy=False)
+
         support, pauli = logical_op
         if pauli == "Z":
             anc = x_ancilla(0)
@@ -218,7 +220,7 @@ class LRCCircuitBuilder:
             for q in support:
                 circuit.append("CX", [self.patch.get_idx(qubit=q), anc])
             circuit.append("TICK", [])
-            self.append_meas(circuit, "MX", [anc], label="init_logical_z")
+            self.append_meas(circuit, "MX", [anc], label="init_logical_z", noisy=False)
             circuit.append("TICK", [])
         elif pauli == "X":
             anc = z_ancilla(0)
@@ -227,17 +229,17 @@ class LRCCircuitBuilder:
             for q in support:
                 circuit.append("CX", [anc, self.patch.get_idx(qubit=q)])
             circuit.append("TICK", [])
-            self.append_meas(circuit, "M", [anc], label="init_logical_x")
+            self.append_meas(circuit, "M", [anc], label="init_logical_x", noisy=False)
             circuit.append("TICK", [])
         else:
             raise ValueError(f"Unsupported logical operator type: {pauli}")
 
-        # EC rounds
-        self.build_ec(circuit)
-
-    def build_ec(self, circuit: stim.Circuit):
+    def build_ec(self, circuit: stim.Circuit, n_rounds: int = None, noisy: bool = True):
         def z_ancilla(check_i): return self.n_data + check_i
         def x_ancilla(check_i): return self.n_data + self.n_z + check_i
+
+        if n_rounds is None:
+            n_rounds = self.rounds
 
         meas_gates = {"M", "MX", "MY", "MZ", "MR", "MRX"}
         schedule = {}
@@ -246,14 +248,18 @@ class LRCCircuitBuilder:
             schedule.setdefault(t, []).append((gate, list(targets)))
 
         add(0, "R", self.z_ancilla_qubits)
+        if noisy and self.p_data > 0:
+            add(0, "DEPOLARIZE1", self.left)
 
         for t, edges in self.lz_coloring.items():
             for (check_i, qubit_j) in edges:
                 add(t + 1, "CX", [qubit_j, z_ancilla(check_i)])
 
-        add(self.t2 + 1, "RX", self.x_ancilla_qubits)
+        add(self.t2, "RX", self.x_ancilla_qubits)
+        if noisy and self.p_data > 0:
+            add(self.t2, "DEPOLARIZE1", self.right)
 
-        for r in range(self.rounds - 1):
+        for r in range(n_rounds - 1):
             offset = r * self.t_per_round
 
             for t, edges in self.lx_coloring.items():
@@ -268,8 +274,10 @@ class LRCCircuitBuilder:
                 for (check_i, qubit_j) in edges:
                     add(offset + self.t2 + self.t1 + 3 + t, "CX", [x_ancilla(check_i), qubit_j])
 
-            add(offset + self.t2 + self.t1 + 3, "M",  self.z_ancilla_qubits)
-            add(offset + self.t2 + self.t1 + 4, "R",  self.z_ancilla_qubits)
+            add(offset + self.t2 + self.t1 + 3, "M", self.z_ancilla_qubits)
+            add(offset + self.t2 + self.t1 + 4, "R", self.z_ancilla_qubits)
+            if noisy and self.p_data > 0:
+                add(offset + self.t2 + self.t1 + 4, "DEPOLARIZE1", self.left)
 
             for t, edges in self.lz_coloring.items():
                 for (check_i, qubit_j) in edges:
@@ -277,29 +285,33 @@ class LRCCircuitBuilder:
 
             add(offset + 2*self.t2 + self.t1 + 3, "MX", self.x_ancilla_qubits)
             add(offset + 2*self.t2 + self.t1 + 4, "RX", self.x_ancilla_qubits)
+            if noisy and self.p_data > 0:
+                add(offset + 2*self.t2 + self.t1 + 4, "DEPOLARIZE1", self.right)
 
-        final_offset = self.rounds * self.t_per_round
+        final_offset = (n_rounds - 1) * self.t_per_round
 
         for t, edges in self.lx_coloring.items():
             for (check_i, qubit_j) in edges:
-                add(final_offset + self.t2 + 2 + t, "CX", [x_ancilla(check_i), qubit_j])
+                add(final_offset + self.t2 + 3 + t, "CX", [x_ancilla(check_i), qubit_j])
 
         for t, edges in self.rz_coloring.items():
             for (check_i, qubit_j) in edges:
-                add(final_offset + self.t2 + 2 + t, "CX", [qubit_j, z_ancilla(check_i)])
+                add(final_offset + self.t2 + 3 + t, "CX", [qubit_j, z_ancilla(check_i)])
 
-        add(final_offset + self.t2 + self.t1 + 2, "M",  self.z_ancilla_qubits)
+        add(final_offset + self.t2 + self.t1 + 3, "M", self.z_ancilla_qubits)
 
         for t, edges in self.rx_coloring.items():
             for (check_i, qubit_j) in edges:
-                add(final_offset + self.t2 + self.t1 + 2 + t, "CX", [x_ancilla(check_i), qubit_j])
+                add(final_offset + self.t2 + self.t1 + 3 + t, "CX", [x_ancilla(check_i), qubit_j])
 
-        add(final_offset + 2*self.t2 + self.t1 + 2, "MX", self.x_ancilla_qubits)
+        add(final_offset + 2*self.t2 + self.t1 + 3, "MX", self.x_ancilla_qubits)
 
         for t in sorted(schedule.keys()):
             for (gate, targets) in schedule[t]:
                 if gate in meas_gates:
-                    self.append_meas(circuit, gate, targets)
+                    self.append_meas(circuit, gate, targets, noisy=noisy)
+                elif gate == "DEPOLARIZE1":
+                    circuit.append(gate, targets, self.p_data)
                 else:
                     circuit.append(gate, targets)
             circuit.append("TICK", [])
@@ -341,8 +353,11 @@ class LRCCircuitBuilder:
         # TODO: logical_op을 외부에서 받도록 수정 필요
         self.build_init(circuit, logical_op=(self.patch.data_qubits()[0:3], "Z"))
 
-        # 마지막 data qubit Z measurement
-        self.append_meas(circuit, "M", list(range(self.n_data)), label="final_data")
+        # EC rounds (noisy)
+        self.build_ec(circuit, n_rounds=self.rounds, noisy=True)
+
+        # 마지막 data qubit Z measurement (noise 없음)
+        self.append_meas(circuit, "M", list(range(self.n_data)), label="final_data", noisy=False)
 
         # OBSERVABLE_INCLUDE: init logical meas XOR final logical meas
         # TODO: logical Z support qubit idx 정확히 지정 필요

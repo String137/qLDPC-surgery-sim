@@ -105,81 +105,81 @@ class MergedPatch(CodePatch):
 # ---------------------------------------------------------------------------
 
 # class MergedPatchWithAncilla(CodePatch):
-    """
-    Three-way merge: patch1 ↔ ancilla ↔ patch2
-    """
+#     """
+#     Three-way merge: patch1 ↔ ancilla ↔ patch2
+#     """
 
-    def __init__(
-        self,
-        patch1: CodePatch,
-        ancilla: CodePatch,
-        patch2: CodePatch,
-        seam_x_checks: list[Check],
-        seam_z_checks: list[Check],
-        name: str = "merged-ancilla",
-    ):
-        self._name = name
-        self.patch1 = patch1
-        self.ancilla = ancilla
-        self.patch2 = patch2
+#     def __init__(
+#         self,
+#         patch1: CodePatch,
+#         ancilla: CodePatch,
+#         patch2: CodePatch,
+#         seam_x_checks: list[Check],
+#         seam_z_checks: list[Check],
+#         name: str = "merged-ancilla",
+#     ):
+#         self._name = name
+#         self.patch1 = patch1
+#         self.ancilla = ancilla
+#         self.patch2 = patch2
 
-        self._x_checks = (
-            patch1.x_checks() +
-            seam_x_checks +
-            ancilla.x_checks() +
-            patch2.x_checks()
-        )
+#         self._x_checks = (
+#             patch1.x_checks() +
+#             seam_x_checks +
+#             ancilla.x_checks() +
+#             patch2.x_checks()
+#         )
 
-        self._z_checks = (
-            patch1.z_checks() +
-            seam_z_checks +
-            ancilla.z_checks() +
-            patch2.z_checks()
-        )
+#         self._z_checks = (
+#             patch1.z_checks() +
+#             seam_z_checks +
+#             ancilla.z_checks() +
+#             patch2.z_checks()
+#         )
 
-        self._seam_x_checks = seam_x_checks
-        self._seam_z_checks = seam_z_checks
+#         self._seam_x_checks = seam_x_checks
+#         self._seam_z_checks = seam_z_checks
 
-        n_patch1_x = len(patch1.x_checks())
-        n_seam_x = len(seam_x_checks)
-        self._seam_x_slice = slice(n_patch1_x, n_patch1_x + n_seam_x)
+#         n_patch1_x = len(patch1.x_checks())
+#         n_seam_x = len(seam_x_checks)
+#         self._seam_x_slice = slice(n_patch1_x, n_patch1_x + n_seam_x)
 
-        n_patch1_z = len(patch1.z_checks())
-        n_seam_z = len(seam_z_checks)
-        self._seam_z_slice = slice(n_patch1_z, n_patch1_z + n_seam_z)
+#         n_patch1_z = len(patch1.z_checks())
+#         n_seam_z = len(seam_z_checks)
+#         self._seam_z_slice = slice(n_patch1_z, n_patch1_z + n_seam_z)
 
-        self._x_logicals = patch1.x_logicals() + patch2.x_logicals()
-        self._z_logicals = patch1.z_logicals() + patch2.z_logicals()
+#         self._x_logicals = patch1.x_logicals() + patch2.x_logicals()
+#         self._z_logicals = patch1.z_logicals() + patch2.z_logicals()
 
-        self._registry = QubitRegistry()
-        self._registry.register(patch1.data_qubits())
-        self._registry.register(ancilla.data_qubits())
-        self._registry.register(patch2.data_qubits())
+#         self._registry = QubitRegistry()
+#         self._registry.register(patch1.data_qubits())
+#         self._registry.register(ancilla.data_qubits())
+#         self._registry.register(patch2.data_qubits())
 
-    @property
-    def name(self): return self._name
+#     @property
+#     def name(self): return self._name
 
-    def data_qubits(self) -> list[Qubit]:
-        return (self.patch1.data_qubits() +
-                self.ancilla.data_qubits() +
-                self.patch2.data_qubits())
+#     def data_qubits(self) -> list[Qubit]:
+#         return (self.patch1.data_qubits() +
+#                 self.ancilla.data_qubits() +
+#                 self.patch2.data_qubits())
 
-    def x_checks(self) -> list[Check]:  return self._x_checks
-    def z_checks(self) -> list[Check]:  return self._z_checks
-    def x_logicals(self):               return self._x_logicals
-    def z_logicals(self):               return self._z_logicals
+#     def x_checks(self) -> list[Check]:  return self._x_checks
+#     def z_checks(self) -> list[Check]:  return self._z_checks
+#     def x_logicals(self):               return self._x_logicals
+#     def z_logicals(self):               return self._z_logicals
 
-    def registry(self) -> QubitRegistry:
-        return self._registry
+#     def registry(self) -> QubitRegistry:
+#         return self._registry
 
-    def seam_x_checks(self) -> list[Check]:
-        return self._seam_x_checks
+#     def seam_x_checks(self) -> list[Check]:
+#         return self._seam_x_checks
 
-    def seam_z_checks(self) -> list[Check]:
-        return self._seam_z_checks
+#     def seam_z_checks(self) -> list[Check]:
+#         return self._seam_z_checks
 
-    def make_registry(self) -> QubitRegistry:
-        return self._registry
+#     def make_registry(self) -> QubitRegistry:
+#         return self._registry
 
 
 # ---------------------------------------------------------------------------
@@ -334,148 +334,148 @@ class MergedPatch(CodePatch):
 # Surgery circuit (stim)
 # ---------------------------------------------------------------------------
 
-def build_surgery_circuit(
-    patch1: RotatedSurfaceCode,
-    patch2: RotatedSurfaceCode,
-    *,
-    rounds: int,
-    p_data: float,
-    p_meas: float,
-    basis: str = "ZZ",
-):
-    import stim
+# def build_surgery_circuit(
+#     patch1: RotatedSurfaceCode,
+#     patch2: RotatedSurfaceCode,
+#     *,
+#     rounds: int,
+#     p_data: float,
+#     p_meas: float,
+#     basis: str = "ZZ",
+# ):
+#     import stim
 
-    if basis == "ZZ":
-        pairs = surface_zz_boundary_pairs(patch1, patch2)
-        merged = build_zz_merged(patch1, patch2, pairs)
-        meas_basis = "Z"
-    elif basis == "XX":
-        pairs = surface_xx_boundary_pairs(patch1, patch2)
-        merged = build_xx_merged(patch1, patch2, pairs)
-        meas_basis = "X"
-    else:
-        raise ValueError(f"Unknown basis: {basis}")
+#     if basis == "ZZ":
+#         pairs = surface_zz_boundary_pairs(patch1, patch2)
+#         merged = build_zz_merged(patch1, patch2, pairs)
+#         meas_basis = "Z"
+#     elif basis == "XX":
+#         pairs = surface_xx_boundary_pairs(patch1, patch2)
+#         merged = build_xx_merged(patch1, patch2, pairs)
+#         meas_basis = "X"
+#     else:
+#         raise ValueError(f"Unknown basis: {basis}")
 
-    reg = merged.registry()
-    n_total = len(reg)
+#     reg = merged.registry()
+#     n_total = len(reg)
 
-    circuit = stim.Circuit()
-    circuit.append("R", list(range(n_total)))
+#     circuit = stim.Circuit()
+#     circuit.append("R", list(range(n_total)))
 
-    circuit += _measure_checks_rounds(
-        checks=patch1.z_checks() if meas_basis == "Z" else patch1.x_checks(),
-        reg=reg,
-        rounds=rounds,
-        p_data=p_data,
-        p_meas=p_meas,
-        pauli=meas_basis,
-        data_qubit_subset=patch1.data_qubits(),
-        phase_t_offset=0,
-    )
-    circuit += _measure_checks_rounds(
-        checks=patch2.z_checks() if meas_basis == "Z" else patch2.x_checks(),
-        reg=reg,
-        rounds=rounds,
-        p_data=p_data,
-        p_meas=p_meas,
-        pauli=meas_basis,
-        data_qubit_subset=patch2.data_qubits(),
-        phase_t_offset=0,
-    )
+#     circuit += _measure_checks_rounds(
+#         checks=patch1.z_checks() if meas_basis == "Z" else patch1.x_checks(),
+#         reg=reg,
+#         rounds=rounds,
+#         p_data=p_data,
+#         p_meas=p_meas,
+#         pauli=meas_basis,
+#         data_qubit_subset=patch1.data_qubits(),
+#         phase_t_offset=0,
+#     )
+#     circuit += _measure_checks_rounds(
+#         checks=patch2.z_checks() if meas_basis == "Z" else patch2.x_checks(),
+#         reg=reg,
+#         rounds=rounds,
+#         p_data=p_data,
+#         p_meas=p_meas,
+#         pauli=meas_basis,
+#         data_qubit_subset=patch2.data_qubits(),
+#         phase_t_offset=0,
+#     )
 
-    merged_checks = (merged.z_checks() if meas_basis == "Z"
-                     else merged.x_checks())
-    circuit += _measure_checks_rounds(
-        checks=merged_checks,
-        reg=reg,
-        rounds=rounds,
-        p_data=p_data,
-        p_meas=p_meas,
-        pauli=meas_basis,
-        data_qubit_subset=merged.data_qubits(),
-        phase_t_offset=rounds,
-    )
+#     merged_checks = (merged.z_checks() if meas_basis == "Z"
+#                      else merged.x_checks())
+#     circuit += _measure_checks_rounds(
+#         checks=merged_checks,
+#         reg=reg,
+#         rounds=rounds,
+#         p_data=p_data,
+#         p_meas=p_meas,
+#         pauli=meas_basis,
+#         data_qubit_subset=merged.data_qubits(),
+#         phase_t_offset=rounds,
+#     )
 
-    data_indices = [reg[q] for q in merged.data_qubits()]
-    circuit.append("M", data_indices)
+#     data_indices = [reg[q] for q in merged.data_qubits()]
+#     circuit.append("M", data_indices)
 
-    lz1 = merged.patch1.z_logicals()[0]
-    lz2 = merged.patch2.z_logicals()[0]
+#     lz1 = merged.patch1.z_logicals()[0]
+#     lz2 = merged.patch2.z_logicals()[0]
 
-    n_p1z = len(merged.patch1.z_checks())
-    n_seam_z = len(merged.seam_z_checks())
-    n_merged_z = len(merged.z_checks())
-    seam_zz_targets = [
-        stim.target_rec(-(n_total + n_merged_z - (n_p1z + i)))
-        for i in range(n_seam_z)
-    ]
-    circuit.append("OBSERVABLE_INCLUDE", seam_zz_targets, 0)
+#     n_p1z = len(merged.patch1.z_checks())
+#     n_seam_z = len(merged.seam_z_checks())
+#     n_merged_z = len(merged.z_checks())
+#     seam_zz_targets = [
+#         stim.target_rec(-(n_total + n_merged_z - (n_p1z + i)))
+#         for i in range(n_seam_z)
+#     ]
+#     circuit.append("OBSERVABLE_INCLUDE", seam_zz_targets, 0)
 
-    idx1 = sorted(reg[q] for q in lz1)
-    targets_z1 = [stim.target_rec(-(n_total - i)) for i in idx1]
-    circuit.append("OBSERVABLE_INCLUDE", targets_z1, 1)
+#     idx1 = sorted(reg[q] for q in lz1)
+#     targets_z1 = [stim.target_rec(-(n_total - i)) for i in idx1]
+#     circuit.append("OBSERVABLE_INCLUDE", targets_z1, 1)
 
-    idx2 = sorted(reg[q] for q in lz2)
-    targets_z2 = [stim.target_rec(-(n_total - i)) for i in idx2]
-    circuit.append("OBSERVABLE_INCLUDE", targets_z2, 2)
+#     idx2 = sorted(reg[q] for q in lz2)
+#     targets_z2 = [stim.target_rec(-(n_total - i)) for i in idx2]
+#     circuit.append("OBSERVABLE_INCLUDE", targets_z2, 2)
 
-    return circuit
+#     return circuit
 
 
-def _measure_checks_rounds(
-    checks: list[Check],
-    reg: QubitRegistry,
-    rounds: int,
-    p_data: float,
-    p_meas: float,
-    pauli: str,
-    data_qubit_subset: list[Qubit],
-    phase_t_offset: int,
-):
-    import stim
+# def _measure_checks_rounds(
+#     checks: list[Check],
+#     reg: QubitRegistry,
+#     rounds: int,
+#     p_data: float,
+#     p_meas: float,
+#     pauli: str,
+#     data_qubit_subset: list[Qubit],
+#     phase_t_offset: int,
+# ):
+#     import stim
 
-    circuit = stim.Circuit()
-    n_global = len(reg)
-    data_indices = [reg[q] for q in data_qubit_subset]
+#     circuit = stim.Circuit()
+#     n_global = len(reg)
+#     data_indices = [reg[q] for q in data_qubit_subset]
 
-    anc_start = n_global
-    n_chks = len(checks)
+#     anc_start = n_global
+#     n_chks = len(checks)
 
-    for t in range(rounds):
-        if p_data > 0:
-            circuit.append("X_ERROR", data_indices, p_data)
-            circuit.append("Z_ERROR", data_indices, p_data)
+#     for t in range(rounds):
+#         if p_data > 0:
+#             circuit.append("X_ERROR", data_indices, p_data)
+#             circuit.append("Z_ERROR", data_indices, p_data)
 
-        anc = list(range(anc_start, anc_start + n_chks))
-        circuit.append("R", anc)
+#         anc = list(range(anc_start, anc_start + n_chks))
+#         circuit.append("R", anc)
 
-        for ai, chk in enumerate(checks):
-            a = anc[ai]
-            q_indices = sorted(reg.check_to_indices(chk))
-            if pauli == "X":
-                circuit.append("H", [a])
-                for q in q_indices:
-                    circuit.append("CNOT", [a, q])
-                circuit.append("H", [a])
-            else:
-                for q in q_indices:
-                    circuit.append("CNOT", [q, a])
+#         for ai, chk in enumerate(checks):
+#             a = anc[ai]
+#             q_indices = sorted(reg.check_to_indices(chk))
+#             if pauli == "X":
+#                 circuit.append("H", [a])
+#                 for q in q_indices:
+#                     circuit.append("CNOT", [a, q])
+#                 circuit.append("H", [a])
+#             else:
+#                 for q in q_indices:
+#                     circuit.append("CNOT", [q, a])
 
-        if p_meas > 0:
-            circuit.append("X_ERROR", anc, p_meas)
-        circuit.append("M", anc)
+#         if p_meas > 0:
+#             circuit.append("X_ERROR", anc, p_meas)
+#         circuit.append("M", anc)
 
-        for ai in range(n_chks):
-            rec_cur = stim.target_rec(-(n_chks - ai))
-            t_abs = phase_t_offset + t
-            if t_abs == 0:
-                circuit.append("DETECTOR", [rec_cur], [ai, 0, t_abs])
-            else:
-                rec_prev = stim.target_rec(-(n_chks - ai) - n_chks)
-                circuit.append("DETECTOR",
-                                [rec_cur, rec_prev], [ai, 0, t_abs])
+#         for ai in range(n_chks):
+#             rec_cur = stim.target_rec(-(n_chks - ai))
+#             t_abs = phase_t_offset + t
+#             if t_abs == 0:
+#                 circuit.append("DETECTOR", [rec_cur], [ai, 0, t_abs])
+#             else:
+#                 rec_prev = stim.target_rec(-(n_chks - ai) - n_chks)
+#                 circuit.append("DETECTOR",
+#                                 [rec_cur, rec_prev], [ai, 0, t_abs])
 
-    return circuit
+#     return circuit
 
 
 class DirectSum(CodePatch):
