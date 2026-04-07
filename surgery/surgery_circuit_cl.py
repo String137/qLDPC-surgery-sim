@@ -213,23 +213,23 @@ class LRCCircuitBuilder:
         self.build_ec(circuit, n_rounds=1, noisy=False)
 
         support, pauli = logical_op
-        if pauli == "Z":
+        if pauli == "X":
             anc = x_ancilla(0)
             circuit.append("RX", [anc])
             circuit.append("TICK", [])
             for q in support:
-                circuit.append("CX", [self.patch.get_idx(qubit=q), anc])
+                circuit.append("CX", [anc, self.patch.get_idx(qubit=q)])
             circuit.append("TICK", [])
-            self.append_meas(circuit, "MX", [anc], label="init_logical_z", noisy=False)
+            self.append_meas(circuit, "MX", [anc], label="init_logical_x", noisy=False)
             circuit.append("TICK", [])
-        elif pauli == "X":
+        elif pauli == "Z":
             anc = z_ancilla(0)
             circuit.append("R", [anc])
             circuit.append("TICK", [])
             for q in support:
-                circuit.append("CX", [anc, self.patch.get_idx(qubit=q)])
+                circuit.append("CX", [self.patch.get_idx(qubit=q), anc])
             circuit.append("TICK", [])
-            self.append_meas(circuit, "M", [anc], label="init_logical_x", noisy=False)
+            self.append_meas(circuit, "M", [anc], label="init_logical_z", noisy=False)
             circuit.append("TICK", [])
         else:
             raise ValueError(f"Unsupported logical operator type: {pauli}")
