@@ -357,7 +357,7 @@ class LRCCircuitBuilder:
         self.build_ec(circuit, n_rounds=self.rounds, noisy=True)
 
         # 마지막 data qubit Z measurement (noise 없음)
-        self.append_meas(circuit, "M", list(range(self.n_data)), label="final_data", noisy=False)
+        self.append_meas(circuit, "M", list(range(self.n_data)), label="final_data", noisy=True)
 
         # OBSERVABLE_INCLUDE: init logical meas XOR final logical meas
         # TODO: logical Z support qubit idx 정확히 지정 필요
