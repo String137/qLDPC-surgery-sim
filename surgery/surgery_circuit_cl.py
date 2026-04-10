@@ -264,29 +264,29 @@ class LRCCircuitBuilder:
 
             for t, edges in self.lx_coloring.items():
                 for (check_i, qubit_j) in edges:
-                    add(offset + self.t2 + 2 + t, "CX", [x_ancilla(check_i), qubit_j])
+                    add(offset + self.t2 + 1 + t, "CX", [x_ancilla(check_i), qubit_j])
 
             for t, edges in self.rz_coloring.items():
                 for (check_i, qubit_j) in edges:
-                    add(offset + self.t2 + 2 + t, "CX", [qubit_j, z_ancilla(check_i)])
+                    add(offset + self.t2 + 1 + t, "CX", [qubit_j, z_ancilla(check_i)])
 
             for t, edges in self.rx_coloring.items():
                 for (check_i, qubit_j) in edges:
-                    add(offset + self.t2 + self.t1 + 3 + t, "CX", [x_ancilla(check_i), qubit_j])
+                    add(offset + self.t2 + self.t1 + 1 + t, "CX", [x_ancilla(check_i), qubit_j])
 
-            add(offset + self.t2 + self.t1 + 3, "M", self.z_ancilla_qubits)
-            add(offset + self.t2 + self.t1 + 4, "R", self.z_ancilla_qubits)
+            add(offset + self.t2 + self.t1 + 1, "M", self.z_ancilla_qubits)
+            add(offset + self.t2 + self.t1 + 2, "R", self.z_ancilla_qubits)
             if noisy and self.p_data > 0:
-                add(offset + self.t2 + self.t1 + 4, "DEPOLARIZE1", self.left)
+                add(offset + self.t2 + self.t1 + 2, "DEPOLARIZE1", self.left)
 
             for t, edges in self.lz_coloring.items():
                 for (check_i, qubit_j) in edges:
-                    add(offset + self.t2 + self.t1 + 5 + t, "CX", [qubit_j, z_ancilla(check_i)])
+                    add(offset + self.t2 + self.t1 + 3 + t, "CX", [qubit_j, z_ancilla(check_i)])
 
-            add(offset + 2*self.t2 + self.t1 + 3, "MX", self.x_ancilla_qubits)
-            add(offset + 2*self.t2 + self.t1 + 4, "RX", self.x_ancilla_qubits)
+            add(offset + 2*self.t2 + self.t1 + 1, "MX", self.x_ancilla_qubits)
+            add(offset + 2*self.t2 + self.t1 + 2, "RX", self.x_ancilla_qubits)
             if noisy and self.p_data > 0:
-                add(offset + 2*self.t2 + self.t1 + 4, "DEPOLARIZE1", self.right)
+                add(offset + 2*self.t2 + self.t1 + 2, "DEPOLARIZE1", self.right)
 
         final_offset = (n_rounds - 1) * self.t_per_round
 
@@ -357,7 +357,7 @@ class LRCCircuitBuilder:
         self.build_ec(circuit, n_rounds=self.rounds, noisy=True)
 
         # 마지막 data qubit Z measurement (noise 없음)
-        self.append_meas(circuit, "M", list(range(self.n_data)), label="final_data", noisy=True)
+        self.append_meas(circuit, "M", list(range(self.n_data)), label="final_data", noisy=False)
 
         # OBSERVABLE_INCLUDE: init logical meas XOR final logical meas
         # TODO: logical Z support qubit idx 정확히 지정 필요
