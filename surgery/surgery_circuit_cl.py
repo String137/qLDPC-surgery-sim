@@ -29,7 +29,7 @@ class LRCCircuitBuilder:
         self.check_idx = {chk: i for i, chk in enumerate(patch.z_checks() + patch.x_checks())}
         self.idx_to_check = {i: chk for chk, i in self.check_idx.items()}
         self.ancilla_coord = None
-        self.meas_record = []
+        self.meas_record = {}
         self.meas_count = 0
 
     def find_partition(self):
@@ -65,18 +65,20 @@ class LRCCircuitBuilder:
         for i, tgt in enumerate(targets):
             ancilla_idx = tgt - self.n_data
             check = self.idx_to_check.get(ancilla_idx, None)
-            self.meas_record.append({
+            self.meas_record[self.meas_count + i] = {
                 "gate": gate,
                 "target": tgt,
                 "check": check,
                 "tick": current_tick,
                 "label": label,
                 "meas_idx": self.meas_count + i,
-            })
+            }
         self.meas_count += len(targets)
+        return circuit
 
     def get_rec(self, tick: int = None, check=None, target: int = None, label: str = None) -> stim.GateTarget:
-        for entry in self.meas_record:
+        res = []
+        for entry in self.meas_record.values():
             if tick is not None and entry["tick"] != tick:
                 continue
             if check is not None and entry["check"] != check:
@@ -85,11 +87,14 @@ class LRCCircuitBuilder:
                 continue
             if label is not None and entry["label"] != label:
                 continue
-            return stim.target_rec(entry["meas_idx"] - self.meas_count)
-        raise KeyError(f"No measurement found for tick={tick}, check={check}, target={target}, label={label}")
-
+            res.append(stim.target_rec(entry["meas_idx"] - self.meas_count))
+        if len(res) == 0:
+            raise KeyError(f"No measurement found for tick={tick}, check={check}, target={target}, label={label}")
+        return res
+    
     def get_meas_idx(self, tick: int = None, check=None, target: int = None, label: str = None) -> int:
-        for entry in self.meas_record:
+        res = []
+        for entry in self.meas_record.values():
             if tick is not None and entry["tick"] != tick:
                 continue
             if check is not None and entry["check"] != check:
@@ -98,9 +103,11 @@ class LRCCircuitBuilder:
                 continue
             if label is not None and entry["label"] != label:
                 continue
-            return entry["meas_idx"]
-        raise KeyError(f"No measurement found for tick={tick}, check={check}, target={target}, label={label}")
-
+            res.append(entry["meas_idx"])
+        if len(res) == 0:
+            raise KeyError(f"No measurement found for tick={tick}, check={check}, target={target}, label={label}")
+        return res
+    
     def edge_coloring(self, support: list[Qubit]|list[int], pauli: str, existing_coloring: dict | None = None) -> dict:
         assert pauli in ("X", "Z")
         chk_mat = self.patch.h_x() if pauli == "X" else self.patch.h_z()
@@ -210,7 +217,7 @@ class LRCCircuitBuilder:
         circuit.append("R", list(range(self.n_data)))
         circuit.append("TICK", [])
 
-        self.build_ec(circuit, n_rounds=1, noisy=False)
+        self.build_ec(circuit, n_rounds=1, label="init", noisy=False)
 
         support, pauli = logical_op
         if pauli == "X":
@@ -234,7 +241,7 @@ class LRCCircuitBuilder:
         else:
             raise ValueError(f"Unsupported logical operator type: {pauli}")
 
-    def build_ec(self, circuit: stim.Circuit, n_rounds: int = None, noisy: bool = True):
+    def build_ec(self, circuit: stim.Circuit, n_rounds: int = None, label="ec", noisy: bool = True):
         def z_ancilla(check_i): return self.n_data + check_i
         def x_ancilla(check_i): return self.n_data + self.n_z + check_i
 
@@ -309,7 +316,7 @@ class LRCCircuitBuilder:
         for t in sorted(schedule.keys()):
             for (gate, targets) in schedule[t]:
                 if gate in meas_gates:
-                    self.append_meas(circuit, gate, targets, noisy=noisy)
+                    self.append_meas(circuit, gate, targets, label="ec_check" if label=="ec" else "init_check", noisy=noisy)
                 elif gate == "DEPOLARIZE1":
                     circuit.append(gate, targets, self.p_data)
                 else:
@@ -325,7 +332,7 @@ class LRCCircuitBuilder:
             except ValueError as e:
                 raise ValueError("Ancilla coordinates are not set.") from e
 
-        self.meas_record = []
+        self.meas_record = {}
         self.meas_count = 0
 
         self.n_data = self.patch.n_qubits()
@@ -357,14 +364,14 @@ class LRCCircuitBuilder:
         self.build_ec(circuit, n_rounds=self.rounds, noisy=True)
 
         # 마지막 data qubit Z measurement (noise 없음)
-        self.append_meas(circuit, "M", list(range(self.n_data)), label="final_data", noisy=False)
+        # self.append_meas(circuit, "M", list(range(self.n_data)), label="final_data", noisy=True)
 
         # OBSERVABLE_INCLUDE: init logical meas XOR final logical meas
         # TODO: logical Z support qubit idx 정확히 지정 필요
         logical_z_support_idx = [self.patch.get_idx(q) for q in self.patch.data_qubits()[0:3]]
-        init_rec   = self.get_rec(label="init_logical_z")
-        final_recs = [self.get_rec(label="final_data", target=q) for q in logical_z_support_idx]
-        circuit.append("OBSERVABLE_INCLUDE", [init_rec] + final_recs, 0)
+        # init_rec   = self.get_rec(label="init_logical_z")
+        # final_recs = [self.get_rec(label="final_data", target=q) for q in logical_z_support_idx]
+        # circuit.append("OBSERVABLE_INCLUDE", [init_rec] + final_recs, 0)
 
         with open("debug_circuit.svg", "w") as f:
             f.write(str(circuit.diagram("timeslice-svg")))
