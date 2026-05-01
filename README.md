@@ -6,6 +6,11 @@
 현재는 `SurfaceCode`를 테스트베드로 사용하며 (`test.py` 참고), `ConePatch` 기반 XX/ZZ surgery 구조를 구현 중이다.
 `surgery_circuit_cl.py`의 `LRCCircuitBuilder`는 LRC 스케줄 CNOT 편성을 담당하지만, 완성된 회로 빌더는 아직 개발 중이다.
 
+
+# TODO
+
+- https://arxiv.org/pdf/2510.14895 이 논문 Figure 6처럼 X check meas 시작과 끝에 추가하고, detector는 각 round사이로 수동으로 추가하자.
+
 ## 프로젝트 구조
 
 ```
