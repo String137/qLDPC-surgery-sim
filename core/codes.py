@@ -536,6 +536,15 @@ class TrivialCode(CodePatch):
         return [frozenset([q]) for q in self._data_qubits]
 
 
+class LPCodePatch(CodePatch):
+    
+    pass
+
+
+class CCCode(CodePatch):
+    # https://arxiv.org/pdf/2603.05398
+    pass
+
 # ---------------------------------------------------------------------------
 # BBCode adapter (네 기존 코드에서 가져옴)
 # ---------------------------------------------------------------------------

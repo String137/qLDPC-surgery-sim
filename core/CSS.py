@@ -10,7 +10,7 @@ import cplex
 import networkx as nx
 import matplotlib.pyplot as plt
 from itertools import combinations
-
+from sympy import Poly, symbols
 class CSS:
     def __init__(self, Gx, Gz):
         self.n = Gx.shape[1]
@@ -139,6 +139,115 @@ class CSS:
         if self.dx is None or self.dz is None:
             self.calculate_distance()
         return self.dx, self.dz
+
+########################
+
+class LPCode(CSS):
+    """
+        H_XR = [H_a\otimes_R I | I \otimes_R H_b]
+        H_ZR = [I \otimes_R H_b* | H_a* \otimes_R I]
+
+        A1 --(Ha)--> A0
+        B1 --(Hb)--> B0
+
+    """
+    def __init__(self, Ha: list[list[Poly]], Hb: list[list[Poly]], R: Poly):
+        self.Ha = Ha
+        self.Hb = Hb
+        a0 = len(Ha)
+        a1 = len(Ha[0])
+        b0 = len(Hb)
+        b1 = len(Hb[0])
+
+        self.R = R
+        self.x = R.gen
+        self.l = R.degree()
+        self.F = galois.GF(2) # Field
+
+        H_XR = self.hstack_ring(self.kron_ring(Ha, self.eye_ring(b0)), self.kron_ring(self.eye_ring(a0), Hb))
+        H_ZR = self.hstack_ring(self.kron_ring(self.eye_ring(a1), self.conj(Hb)), self.kron_ring(self.conj(Ha), self.eye_ring(b1)))    
+        
+        self.Hx = self.to_binary(H_XR)
+        self.Hz = self.to_binary(H_ZR)
+
+        # Call parent constructor after Hx and Hz are defined
+        super().__init__(self.Hx, self.Hz)
+
+    def poly_mod(self, p: Poly) -> Poly:
+        """p mod R over F2"""
+        return p.rem(self.R)
+
+    def poly_mul(self, a: Poly, b: Poly) -> Poly:
+        return self.poly_mod(Poly(a * b, self.x, modulus=2))
+
+    # def poly_conj(self, a: Poly) -> Poly:
+    #     """conjugate: x^i -> x^{l-i} mod R"""
+    #     result = Poly(0, self.x, modulus=2)
+    #     for monom, coeff in zip(a.monoms(), a.coeffs()):
+    #         i = monom[0]
+    #         result = Poly(result + coeff * self.x**(self.l - i), self.x, modulus=2)
+    #     return self.poly_mod(result)
+    def poly_conj(self, a: Poly) -> Poly:
+        """conjugate: x^i -> x^{p-i mod p}"""
+        coeffs = {}
+        for monom, coeff in zip(a.monoms(), a.coeffs()):
+            i = monom[0]
+            new_exp = (self.l - i) % self.l
+            coeffs[new_exp] = (coeffs.get(new_exp, 0) + int(coeff)) % 2
+        expr = sum(c * self.x**e for e, c in coeffs.items() if c)
+        if not expr:
+            return Poly(0, self.x, modulus=2)
+        return self.poly_mod(Poly(expr, self.x, modulus=2))
+
+    def conj(self, M: list[list[Poly]]) -> list[list[Poly]]:
+        """conjugate transpose of ring matrix"""
+        nr, nc = len(M), len(M[0])
+        return [[self.poly_conj(M[i][j]) for i in range(nr)] for j in range(nc)]
+    
+    def eye_ring(self, n: int) -> list[list[Poly]]:
+        one = Poly(1, self.x, modulus=2)
+        zero = Poly(0, self.x, modulus=2)
+        return [[one if i == j else zero for j in range(n)] for i in range(n)]
+
+    def kron_ring(self, A: list[list[Poly]], B: list[list[Poly]]) -> list[list[Poly]]:
+        print(A)
+        print(B)
+        """A ⊗_R B: Kronecker product at ring level"""
+        ra, ca = len(A), len(A[0])
+        rb, cb = len(B), len(B[0])
+        result = [[Poly(0, self.x, modulus=2)] * (ca * cb) for _ in range(ra * rb)]
+        for i in range(ra):
+            for j in range(ca):
+                for k in range(rb):
+                    for l in range(cb):
+                        result[i*rb + k][j*cb + l] = self.poly_mul(A[i][j], B[k][l])
+        return result
+
+    def hstack_ring(self, A: list[list[Poly]], B: list[list[Poly]]) -> list[list[Poly]]:
+        """horizontal concatenation at ring level"""
+        return [row_a + row_b for row_a, row_b in zip(A, B)]
+
+    def poly_to_matrix(self, p: Poly) -> np.ndarray:
+        l = self.l
+        mat = np.zeros((l, l), dtype=np.uint8)
+        for monom, coeff in zip(p.monoms(), p.coeffs()):
+            k = monom[0]
+            for j in range(l):
+                mat[(j + k) % l, j] ^= int(coeff) % 2
+        return mat
+        
+    def to_binary(self, M: list[list[Poly]]) -> np.ndarray:
+        n_r = len(M)
+        n_c = len(M[0])
+        l = self.l
+        result = np.zeros((n_r * l, n_c * l), dtype=np.uint8)
+        for i in range(n_r):
+            for j in range(n_c):
+                result[i*l:(i+1)*l, j*l:(j+1)*l] = self.poly_to_matrix(M[i][j])
+        return result
+    
+
+
 
 #####################
 
