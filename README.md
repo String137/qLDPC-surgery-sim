@@ -11,6 +11,12 @@
 
 - https://arxiv.org/pdf/2510.14895 이 논문 Figure 6처럼 X check meas 시작과 끝에 추가하고, detector는 각 round사이로 수동으로 추가하자.
 
+# Link
+- https://arxiv.org/pdf/2410.03628#page=14
+- https://arxiv.org/pdf/2510.14895
+- https://arxiv.org/pdf/2603.05398#page=17.85
+- https://arxiv.org/pdf/2012.04068#page=6
+
 ## 프로젝트 구조
 
 ```
