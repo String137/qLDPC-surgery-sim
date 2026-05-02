@@ -19,8 +19,8 @@ class CSS:
         self.F = galois.GF(2) # Field
         self.get_center()
         self.k = self.calculate_k()
-        self.logical_x_repr = []    # X logical representatives
-        self.logical_z_repr = []    # Z logical representatives
+        self.logical_x_repr = None    # X logical representatives
+        self.logical_z_repr = None    # Z logical representatives
         self.d = None
         self.dx = None
         self.dz = None
@@ -54,10 +54,10 @@ class CSS:
         """
         # G_opp와 commute하는 space의 basis
         ker_opp = G_opp.null_space()
-        print("ker rank:",np.linalg.matrix_rank(ker_opp))
+        # print("ker rank:",np.linalg.matrix_rank(ker_opp))
         # basis of G_self
         basis_self = G_self.row_space()
-        print("rank:",np.linalg.matrix_rank(basis_self))
+        # print("rank:",np.linalg.matrix_rank(basis_self))
         logicals = []
         current_span = basis_self
         # ker 원소 중 Gauge 기저와 독립적인 것들만 선별 (Stacking Trick)
@@ -74,12 +74,35 @@ class CSS:
                 current_span = self.F(test_matrix)
 
         return self.F(logicals) if logicals else self.F.Zeros((0, self.n))
+    
+    def set_logical_representatives(self, logical_x_repr: list[list], logical_z_repr: list[list]):
+        self.logical_x_repr = self.F(logical_x_repr)
+        self.logical_z_repr = self.F(logical_z_repr)
+        assert self.logical_x_repr.shape[0] == self.k, "Number of logical X representatives must be equal to k."
+        assert self.logical_z_repr.shape[0] == self.k, "Number of logical Z representatives must be equal to k."
+        
+        # check 만족하는지 확인
+        for i in range(self.k):
+            assert np.all(np.dot(self.logical_x_repr[i], self.Gz.T) == 0), f"Logical X_{i} should commute with all Z-checks."
+            assert np.all(np.dot(self.logical_z_repr[i], self.Gx.T) == 0), f"Logical Z_{i} should commute with all X-checks."
+        
+        # logic op간 anti-commute, commute 조건 체크
+        for i in range(self.k):
+            for j in range(self.k):
+                comm = np.dot(self.logical_x_repr[i], self.logical_z_repr[j])
+                if i == j:
+                    assert comm == 1, f"Logical X_{i} and Z_{j} should anti-commute."
+                else:
+                    assert comm == 0, f"Logical X_{i} and Z_{j} should commute."
 
     def get_logical_representatives(self,):
-        # Lx = Ker(Gz) / Rowspace(Gx)
-        self.logical_x_repr = self._extract_quotient_basis(self.Gz, self.Gx)
-        # Lz = Ker(Gx) / Rowspace(Gz)
-        self.logical_z_repr = self._extract_quotient_basis(self.Gx, self.Gz)
+        if self.logical_x_repr is None:
+            # Lx = Ker(Gz) / Rowspace(Gx)
+            self.logical_x_repr = self._extract_quotient_basis(self.Gz, self.Gx)
+        if self.logical_z_repr is None:
+            # Lz = Ker(Gx) / Rowspace(Gz)
+            self.logical_z_repr = self._extract_quotient_basis(self.Gx, self.Gz)
+
     def _find_min_op_weight(self, l_type):
         if l_type == "X":
             G_opp = self.Gz
@@ -113,10 +136,10 @@ class CSS:
         model.add_constraint(model.sum(s)>=1)
         sol = model.solve(log_output=False)
         status = model.solve_status
-        print(f"statue: {status}")
+        # print(f"statue: {status}")
         solve_time = sol.solve_details.time
-        print(f"⏱️ CPLEX 순수 계산 시간: {solve_time:.4f} 초")
-        print(sol.get_values(e))
+        # print(f"⏱️ CPLEX 순수 계산 시간: {solve_time:.4f} 초")
+        # print(sol.get_values(e))
 
         if sol:
             return int(sol.objective_value)
@@ -128,8 +151,8 @@ class CSS:
     def calculate_distance(self,):
         self.get_logical_representatives()
         self.calculate_k()
-        print(self.logical_x_repr)
-        print(self.logical_z_repr)
+        # print(self.logical_x_repr)
+        # print(self.logical_z_repr)
         self.dx = self._find_min_op_weight("X")
         self.dz = self._find_min_op_weight("Z")
         self.d = min(self.dx,self.dz)
@@ -166,13 +189,16 @@ class LPCode(CSS):
 
         H_XR = self.hstack_ring(self.kron_ring(Ha, self.eye_ring(b0)), self.kron_ring(self.eye_ring(a0), Hb))
         H_ZR = self.hstack_ring(self.kron_ring(self.eye_ring(a1), self.conj(Hb)), self.kron_ring(self.conj(Ha), self.eye_ring(b1)))    
-        
+        # LPCode.print_ring_matrix(H_XR)
+        # LPCode.print_ring_matrix(H_ZR)
         self.Hx = self.to_binary(H_XR)
         self.Hz = self.to_binary(H_ZR)
 
         # Call parent constructor after Hx and Hz are defined
-        super().__init__(self.Hx, self.Hz)
-
+        super().__init__(galois.GF(2)(self.Hx), galois.GF(2)(self.Hz))
+    def print_ring_matrix(M):
+        for row in M:
+            print([str(p.as_expr()) for p in row])
     def poly_mod(self, p: Poly) -> Poly:
         """p mod R over F2"""
         return p.rem(self.R)
@@ -210,8 +236,7 @@ class LPCode(CSS):
         return [[one if i == j else zero for j in range(n)] for i in range(n)]
 
     def kron_ring(self, A: list[list[Poly]], B: list[list[Poly]]) -> list[list[Poly]]:
-        print(A)
-        print(B)
+
         """A ⊗_R B: Kronecker product at ring level"""
         ra, ca = len(A), len(A[0])
         rb, cb = len(B), len(B[0])
