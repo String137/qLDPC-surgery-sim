@@ -15,7 +15,7 @@ import numpy as np
 from core.primitives import Qubit, Check, QubitRegistry
 from docplex.mp.model import Model
 from docplex.mp.progress import ProgressClock
-from core.CSS import CSS
+from core.CSS import CSS, LPCode
 import galois
 # ---------------------------------------------------------------------------
 # CodePatch interface
@@ -44,6 +44,26 @@ class CodePatch(ABC):
     @abstractmethod
     def local_coord(self, q: Qubit) -> tuple[float, float]: ...
 
+    def set_css(self, css: CSS):
+        self.css = css
+        self._data_qubits = [Qubit(self.name, idx, None) for idx in range(css.n)]
+        self._x_checks: list[Check] = []
+        self._z_checks: list[Check] = []
+        for i in range(css.Hx.shape[0]):
+            support = frozenset(self._data_qubits[j] for j in range(css.n) if css.Hx[i, j] == 1)
+            self._x_checks.append(Check(support, "X", f"X_{i}"))
+        for i in range(css.Hz.shape[0]):
+            support = frozenset(self._data_qubits[j] for j in range(css.n) if css.Hz[i, j] == 1)
+            self._z_checks.append(Check(support, "Z", f"Z_{i}"))
+        if css.logical_x_repr is not None and css.logical_z_repr is not None:
+            self.set_logicals(css.logical_x_repr, css.logical_z_repr)
+
+
+    def set_logicals(self, lx: list[list[int]], lz: list[list[int]]):
+        self._x_logicals = [frozenset(self._data_qubits[j] for j in range(self.css.n) if lx[i][j] == 1)
+                            for i in range(self.css.k)]
+        self._z_logicals = [frozenset(self._data_qubits[j] for j in range(self.css.n) if lz[i][j] == 1)
+                            for i in range(self.css.k)]
     # @abstractmethod
     # def x_logicals(self) -> list[frozenset[Qubit]]: ...
 
@@ -537,8 +557,18 @@ class TrivialCode(CodePatch):
 
 
 class LPCodePatch(CodePatch):
+    def __init__(self, css: LPCode, patch_name: str = "lp", offset=(0.0, 0.0)):
+        super().__init__(offset)
+        self.set_css(css)
+        self._name = patch_name
     
-    pass
+    def name(self) -> str:
+        return self._name
+    def data_qubits(self) -> list[Qubit]: return self._data_qubits
+    def x_checks(self) -> list[Check]:    return self._x_checks
+    def z_checks(self) -> list[Check]:    return self._z_checks
+    def local_coord(self, q):
+        raise NotImplementedError("LPCodePatch does not have a natural geometry")
 
 
 class CCCode(CodePatch):

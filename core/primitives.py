@@ -23,7 +23,7 @@ class Qubit:
     """
     patch_name: str
     idx: int
-    local_coord: tuple[float, float]
+    local_coord: tuple[float, float]|None
 
     def __repr__(self):
         return f"Q({self.patch_name},{self.idx})"
