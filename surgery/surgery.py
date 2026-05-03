@@ -522,12 +522,15 @@ class ConePatch(CodePatch):
     partial1대신 transpose된 partial1t를 쓸거임. shape도 고쳐주길 바람.
     입력:
         C1, C2   : 두 코드 패치. C = C1 ⊕ C2 로 취급.
-        A        : ancilla code (data qubits 만 가짐)
+        A        : ancilla code 
         f1       : np.ndarray, shape (n, w), F2  — eq.35
         f0       : np.ndarray, shape (nZ, n0Z), F2  — eq.48
                    commutativity: H_Z @ f1 = f0 @ partial1  (mod 2)
         partial1t   : np.ndarray, shape (w, n0Z), F2  — eq.47 + Algorithm 1
         partial0   : np.ndarray, shape (n_cyc, n0Z), F2 or None  — Algorithm 2
+
+    f0의 i번째 행은 기존 code의 i번째 Z check에 추가될 ancilla qubit들의 조합. Check(Z) 객체로 들어옴.
+    f1t의 i번째 행은 ancilla code의 i번째 X check에 추가될 기존 data qubit들의 조합. Check(X) 객체로 들어옴.
     """
 
     def __init__(

@@ -75,6 +75,13 @@ class CSS:
 
         return self.F(logicals) if logicals else self.F.Zeros((0, self.n))
     
+    def commutativity_check(self,):
+        # Hx @ Hz^T == 0 이어야 함.
+        if not np.all(np.dot(self.Hx, self.Hz.T) == 0):
+            re
+        else:
+            return True
+
     def set_logical_representatives(self, logical_x_repr: list[list], logical_z_repr: list[list]):
         self.logical_x_repr = self.F(logical_x_repr)
         self.logical_z_repr = self.F(logical_z_repr)

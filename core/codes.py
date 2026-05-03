@@ -17,6 +17,7 @@ from docplex.mp.model import Model
 from docplex.mp.progress import ProgressClock
 from core.CSS import CSS, LPCode
 import galois
+import networkx as nx
 # ---------------------------------------------------------------------------
 # CodePatch interface
 # ---------------------------------------------------------------------------
@@ -46,7 +47,7 @@ class CodePatch(ABC):
 
     def set_css(self, css: CSS):
         self.css = css
-        self._data_qubits = [Qubit(self.name, idx, None) for idx in range(css.n)]
+        self._data_qubits = [Qubit(self.name(), idx, None) for idx in range(css.n)]
         self._x_checks: list[Check] = []
         self._z_checks: list[Check] = []
         for i in range(css.Hx.shape[0]):
@@ -559,8 +560,9 @@ class TrivialCode(CodePatch):
 class LPCodePatch(CodePatch):
     def __init__(self, css: LPCode, patch_name: str = "lp", offset=(0.0, 0.0)):
         super().__init__(offset)
-        self.set_css(css)
         self._name = patch_name
+        self.set_css(css)
+        
     
     def name(self) -> str:
         return self._name
@@ -630,3 +632,82 @@ class BBCodePatch(CodePatch):
     def z_checks(self): return self._z_checks
     def x_logicals(self): return self._x_logicals
     def z_logicals(self): return self._z_logicals
+
+
+class AncillaGraph(CodePatch):
+    def __init__(self, graph: nx.Graph, patch_name: str = "ancilla_graph", type: str = "X", offset=(0.0, 0.0), scale=(1,1)):
+        # scale = (scale_x, scale_y)은 graph의 vertex들의 min max x좌표 차이가 scale_x이 되도록,
+        # min max y좌표 차이도 scale_y이 되도록
+        
+        super().__init__(offset)
+        self._name = patch_name
+        self._graph = graph
+        self.scale = scale
+        self.edge_index = {edge: i for i, edge in enumerate(graph.edges())}
+        # 역방향도 처리
+        self.edge_index.update({(v, u): i for (u, v), i in self.edge_index.items()})
+        self.vertex_local_coords = {}
+        self.edge_local_coords = {}
+        self.assign_vertex_local_coords()
+        # edge는 vertex 두개의 중점
+        for u, v in graph.edges():
+            x = (self.vertex_local_coords[u][0] + self.vertex_local_coords[v][0]) / 2
+            y = (self.vertex_local_coords[u][1] + self.vertex_local_coords[v][1]) / 2
+            self.edge_local_coords[self.edge_index[(u, v)]] = (x, y)
+        assert type in ("X", "Z"), "type must be 'X' or 'Z'"
+        # vertex가 check에 해당, edge는 qubit
+        self._data_qubits = [Qubit(patch_name, i, self.edge_local_coords[i]) for i in range(graph.number_of_edges())]
+        if type == "X":
+            self._x_checks = []
+            self._z_checks = []
+            for i, v in enumerate(graph.nodes()):
+                # node v를 포함하는 edge들
+                support = frozenset([self._data_qubits[self.edge_index[edge]] for edge in graph.edges(v)])
+
+                self._x_checks.append(Check(support, "X", f"X_{v}"))
+
+                # cycle basis에 해당하는게 z check
+                cb = self.cycle_edge_basis()
+                for cycle in cb:
+                    support = frozenset([self._data_qubits[edge] for edge in cycle])
+                    self._z_checks.append(Check(support, "Z", f"Z_cycle_{cycle}"))
+        else:
+            self._x_checks = []
+            self._z_checks = []
+            raise NotImplementedError("AncillaGraph with Z checks is not implemented yet")
+    
+    def assign_vertex_local_coords(self,):
+        pos = nx.spring_layout(self._graph, seed=42)  # spring layout으로 vertex 좌표 계산
+        # scale 조절
+        minx, maxx = min(x for x, y in pos.values()), max(x for x, y in pos.values())
+        miny, maxy = min(y for x, y in pos.values()), max(y for x, y in pos.values())
+        scale_x, scale_y = self.scale
+        if minx==maxx:
+            maxx = minx + 1
+        if miny==maxy:
+            maxy = miny + 1
+        transform = lambda x, y: (
+            float((x - minx) / (maxx - minx) * scale_x),
+            float((y - miny) / (maxy - miny) * scale_y)
+        )
+        for v, (x, y) in pos.items():
+            self.vertex_local_coords[v] = transform(x, y)
+
+    def cycle_edge_basis(self,):
+        cycles_v = nx.cycle_basis(self._graph)
+        
+        cycles_e = []
+        for cycle in cycles_v:
+            edges = []
+            for i in range(len(cycle)):
+                u, v = cycle[i], cycle[(i+1) % len(cycle)]
+                edges.append(self.edge_index[(u, v)])
+            cycles_e.append(edges)
+        
+        return cycles_e    
+    def name(self): return self._name
+    def data_qubits(self): return self._data_qubits
+    def x_checks(self): return self._x_checks
+    def z_checks(self): return self._z_checks
+    def local_coord(self, q):
+        return q.local_coord
