@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import numpy as np
 from core.primitives import Qubit, Check, QubitRegistry
-from core.codes import CodePatch, RotatedSurfaceCode, EmptyPatch, TrivialCode, SurfaceCode
+from core.codes import *
 
 
 # ---------------------------------------------------------------------------
@@ -99,235 +99,6 @@ class MergedPatch(CodePatch):
     def make_registry(self) -> QubitRegistry:
         return self._registry
 
-
-# ---------------------------------------------------------------------------
-# MergedPatchWithAncilla
-# ---------------------------------------------------------------------------
-
-# class MergedPatchWithAncilla(CodePatch):
-#     """
-#     Three-way merge: patch1 ↔ ancilla ↔ patch2
-#     """
-
-#     def __init__(
-#         self,
-#         patch1: CodePatch,
-#         ancilla: CodePatch,
-#         patch2: CodePatch,
-#         seam_x_checks: list[Check],
-#         seam_z_checks: list[Check],
-#         name: str = "merged-ancilla",
-#     ):
-#         self._name = name
-#         self.patch1 = patch1
-#         self.ancilla = ancilla
-#         self.patch2 = patch2
-
-#         self._x_checks = (
-#             patch1.x_checks() +
-#             seam_x_checks +
-#             ancilla.x_checks() +
-#             patch2.x_checks()
-#         )
-
-#         self._z_checks = (
-#             patch1.z_checks() +
-#             seam_z_checks +
-#             ancilla.z_checks() +
-#             patch2.z_checks()
-#         )
-
-#         self._seam_x_checks = seam_x_checks
-#         self._seam_z_checks = seam_z_checks
-
-#         n_patch1_x = len(patch1.x_checks())
-#         n_seam_x = len(seam_x_checks)
-#         self._seam_x_slice = slice(n_patch1_x, n_patch1_x + n_seam_x)
-
-#         n_patch1_z = len(patch1.z_checks())
-#         n_seam_z = len(seam_z_checks)
-#         self._seam_z_slice = slice(n_patch1_z, n_patch1_z + n_seam_z)
-
-#         self._x_logicals = patch1.x_logicals() + patch2.x_logicals()
-#         self._z_logicals = patch1.z_logicals() + patch2.z_logicals()
-
-#         self._registry = QubitRegistry()
-#         self._registry.register(patch1.data_qubits())
-#         self._registry.register(ancilla.data_qubits())
-#         self._registry.register(patch2.data_qubits())
-
-#     @property
-#     def name(self): return self._name
-
-#     def data_qubits(self) -> list[Qubit]:
-#         return (self.patch1.data_qubits() +
-#                 self.ancilla.data_qubits() +
-#                 self.patch2.data_qubits())
-
-#     def x_checks(self) -> list[Check]:  return self._x_checks
-#     def z_checks(self) -> list[Check]:  return self._z_checks
-#     def x_logicals(self):               return self._x_logicals
-#     def z_logicals(self):               return self._z_logicals
-
-#     def registry(self) -> QubitRegistry:
-#         return self._registry
-
-#     def seam_x_checks(self) -> list[Check]:
-#         return self._seam_x_checks
-
-#     def seam_z_checks(self) -> list[Check]:
-#         return self._seam_z_checks
-
-#     def make_registry(self) -> QubitRegistry:
-#         return self._registry
-
-
-# ---------------------------------------------------------------------------
-# ZZ / XX seam builder
-# ---------------------------------------------------------------------------
-
-# def build_zz_merged(
-#     patch1: CodePatch,
-#     patch2: CodePatch,
-#     boundary_pairs: list[tuple[Qubit, Qubit]],
-#     seam_name: str = "seam",
-# ) -> MergedPatch:
-#     seam_qubits = [Qubit(seam_name, i) for i in range(len(boundary_pairs))]
-
-#     seam_z_checks = [
-#         Check(
-#             frozenset([q1, seam_qubits[i], q2]),
-#             "Z",
-#             f"seam_Z_{i}",
-#         )
-#         for i, (q1, q2) in enumerate(boundary_pairs)
-#     ]
-
-#     return MergedPatch(
-#         patch1=patch1,
-#         patch2=patch2,
-#         seam_data_qubits=seam_qubits,
-#         seam_x_checks=[],
-#         seam_z_checks=seam_z_checks,
-#         name="ZZ-merged",
-#     )
-
-
-# def build_xx_merged(
-#     patch1: CodePatch,
-#     patch2: CodePatch,
-#     boundary_pairs: list[tuple[Qubit, Qubit]],
-#     seam_name: str = "seam",
-# ) -> MergedPatch:
-#     seam_qubits = [Qubit(seam_name, i) for i in range(len(boundary_pairs))]
-
-#     seam_x_checks = [
-#         Check(
-#             frozenset([q1, seam_qubits[i], q2]),
-#             "X",
-#             f"seam_X_{i}",
-#         )
-#         for i, (q1, q2) in enumerate(boundary_pairs)
-#     ]
-
-#     return MergedPatch(
-#         patch1=patch1,
-#         patch2=patch2,
-#         seam_data_qubits=seam_qubits,
-#         seam_x_checks=seam_x_checks,
-#         seam_z_checks=[],
-#         name="XX-merged",
-#     )
-
-
-# ---------------------------------------------------------------------------
-# Surface code seam helper
-# ---------------------------------------------------------------------------
-
-# def surface_zz_boundary_pairs(
-#     patch1: RotatedSurfaceCode,
-#     patch2: RotatedSurfaceCode,
-# ) -> list[tuple[Qubit, Qubit]]:
-#     assert patch1.d == patch2.d
-#     b1 = patch1.boundary_qubits("left")
-#     b2 = patch2.boundary_qubits("left")
-#     return list(zip(b1, b2))
-
-
-# def surface_xx_boundary_pairs(
-#     patch1: RotatedSurfaceCode,
-#     patch2: RotatedSurfaceCode,
-# ) -> list[tuple[Qubit, Qubit]]:
-#     assert patch1.d == patch2.d
-#     b1 = patch1.boundary_qubits("top")
-#     b2 = patch2.boundary_qubits("top")
-#     return list(zip(b1, b2))
-
-
-# ---------------------------------------------------------------------------
-# Merge with Ancilla Code (TrivialCode)
-# ---------------------------------------------------------------------------
-
-# def build_zz_merged_with_ancilla(
-#     patch1: CodePatch,
-#     ancilla: CodePatch,
-#     patch2: CodePatch,
-#     boundary_pairs_1to2: list[tuple[Qubit, Qubit]],
-# ) -> MergedPatchWithAncilla:
-#     anc_qubits = ancilla.data_qubits()
-#     n_seam = len(boundary_pairs_1to2)
-
-#     assert len(anc_qubits) == n_seam
-
-#     return MergedPatchWithAncilla(
-#         patch1=patch1,
-#         ancilla=ancilla,
-#         patch2=patch2,
-#         seam_x_checks=[],
-#         seam_z_checks=[],
-#         name="ZZ-merged-ancilla",
-#     )
-
-
-# def build_xx_merged_with_ancilla(
-#     patch1: CodePatch,
-#     ancilla: CodePatch,
-#     patch2: CodePatch,
-#     boundary_pairs_1to2: list[tuple[Qubit, Qubit]],
-# ) -> MergedPatchWithAncilla:
-#     anc_qubits = ancilla.data_qubits()
-#     n_seam = len(boundary_pairs_1to2)
-
-#     assert len(anc_qubits) == n_seam
-
-#     return MergedPatchWithAncilla(
-#         patch1=patch1,
-#         ancilla=ancilla,
-#         patch2=patch2,
-#         seam_x_checks=[],
-#         seam_z_checks=[],
-#         name="XX-merged-ancilla",
-#     )
-
-
-# def surface_zz_boundary_pairs_with_ancilla(
-#     patch1: RotatedSurfaceCode,
-#     patch2: RotatedSurfaceCode,
-# ) -> list[tuple[Qubit, Qubit]]:
-#     assert patch1.d == patch2.d
-#     b1 = patch1.boundary_qubits("right")
-#     b2 = patch2.boundary_qubits("left")
-#     return list(zip(b1, b2))
-
-
-# def surface_xx_boundary_pairs_with_ancilla(
-#     patch1: RotatedSurfaceCode,
-#     patch2: RotatedSurfaceCode,
-# ) -> list[tuple[Qubit, Qubit]]:
-#     assert patch1.d == patch2.d
-#     b1 = patch1.boundary_qubits("top")
-#     b2 = patch2.boundary_qubits("top")
-#     return list(zip(b1, b2))
 
 
 # ---------------------------------------------------------------------------
@@ -503,6 +274,7 @@ class DirectSum(CodePatch):
     def z_checks(self) -> list[Check]: return self._z_checks
     def make_registry(self) -> QubitRegistry:
         return self._registry
+    def local_coord(self) -> tuple[float, float]: raise NotImplementedError
 
 
 # ---------------------------------------------------------------------------
@@ -611,6 +383,123 @@ class ConePatch(CodePatch):
         # TODO
         raise NotImplementedError
 
+
+
+class MergedCodeWithGraph(ConePatch):
+    """ 
+    Codepatch C1, C2를 AncillaGraph를 통해 merge.
+    일단 logical XX 측정만 구현
+    C1, C2의 logical X operator들의 support가 port function을 통해 graph의 vertex(X-check)로 injective하게 mapping(각 codeblock 내에서의 injective)
+    edge(ancilla qubit)가 C1, C2의 Z-check의 support에 추가되는데, codeblock Ci의 Z-check s에 대해 logical X operator의 support와 overlap하는 qubit들을 L_s라고 하자.
+    port function은 L_s를 V_s=f(L_s)\subseteq V로 mapping하는데, V_s의 perfect matching에 대응되는 edge들이 Z-check s에 추가된다.
+    이를 고려해서 ConePatch를 만들어주는 class.
+
+    dict = None이면 default로 mapping해줌.
+    """
+    def __init__(
+        self,
+        C1: CodePatch,
+        C2: CodePatch,
+        anc_graph: AncillaGraph,
+        X1: list[Qubit],
+        X2: list[Qubit],
+        port_func: dict|None = None,
+        name: str = "merged-graph",
+    ):
+        self._name = name
+        self.C1 = C1
+        self.C2 = C2
+        self.anc_graph = anc_graph
+        self.X1 = X1
+        self.X2 = X2
+        self.direct_sum = DirectSum(C1, C2)
+
+        # # qubit register
+        # c_qubits = self.direct_sum.data_qubits()
+        # a_qubits = self.anc_graph.data_qubits()
+        # self._data_qubits = c_qubits + a_qubits
+
+        # self._registry = QubitRegistry()
+        # self._registry.register(c_qubits)
+        # self._registry.register(a_qubits)
+
+        # self.patch_name_dict = {
+        #     C1.name: C1,
+        #     C2.name: C2,
+        #     anc_graph.name: anc_graph
+        # }
+
+        # port function
+
+        assert max(len(X1), len(X2)) <= len(anc_graph.x_checks())   # for injectivity condition
+
+        if port_func == None:
+            self.port_func = {}
+            # Qubit -> check idx 매핑
+            for i, q in enumerate(X1):
+                self.port_func[q] = i
+            for i, q in enumerate(X2):
+                self.port_func[q] = i
+            
+        else:
+            self.port_func = port_func
+        
+        # check construction
+
+        ## Ancilla X check에 추가할 qubit들
+        f1t = [Check.get_empty_check()] * len(anc_graph.x_checks())
+        for q in X1:
+            idx = self.port_func[q]
+            f1t[idx] += Check(frozenset([q]), "X")
+        for q in X2:
+            idx = self.port_func[q]
+            f1t[idx] += Check(frozenset([q]), "X")
+
+        ## C1, C2의 Z check에 추가할 qubit들
+        ### C1 Z check 개수
+        cnt_z1 = len(C1.z_checks())
+        f0 = [Check.get_empty_check()] * len(self.direct_sum.z_checks())
+        for i, s in enumerate(C1.z_checks()):
+            L_s = [q for q in s.qubits if q in X1]
+            if len(L_s) == 0:
+                continue
+            V_s = [self.port_func[q] for q in L_s]
+            matching = anc_graph.get_perfect_matching(V_s)
+            for src, tar, path in matching:
+                for edge in path:
+                    q_edge = anc_graph.edge_index[edge]
+                    f0[i] += Check(frozenset([anc_graph.data_qubits()[q_edge]]), "Z")
+        for i, s in enumerate(C2.z_checks(), start=cnt_z1):
+            L_s = [q for q in s.qubits if q in X2]
+            if len(L_s) == 0:
+                continue
+            V_s = [self.port_func[q] for q in L_s]
+            matching = anc_graph.get_perfect_matching(V_s)
+            for src, tar, path in matching:
+                for edge in path:
+                    q_edge = anc_graph.edge_index[edge]
+                    f0[i] += Check(frozenset([anc_graph.data_qubits()[q_edge]]), "Z")
+
+        super().__init__(C1, C2, anc_graph, f1t, f0, name)
+                
+    
+    @property
+    def name(self) -> str: return self._name
+    def data_qubits(self) -> list[Qubit]: return self._data_qubits
+    def x_checks(self)   -> list[Check]:  return self._x_checks
+    def z_checks(self)   -> list[Check]:  return self._z_checks
+    def x_logicals(self):                 return self._x_logicals
+    def z_logicals(self):                 return self._z_logicals
+    def make_registry(self) -> QubitRegistry: return self._registry
+
+    # def local_coord(self, q: Qubit) -> tuple[float, float]:
+    #     # ConePatch에서의 local_coord
+    #     lx, ly = q._local_coord()
+    #     ox, oy = self.patch_name_dict[q.patch_name]._offset
+    #     return lx + ox, ly + oy
+
+    # def get_idx(self, q: Qubit) -> int:
+    #     return self._registry[q]
 
 def build_xx_cone_surface(d: int) -> ConePatch:
     C1 = SurfaceCode(d, patch_name="surf1", offset=(0.0,0.0))

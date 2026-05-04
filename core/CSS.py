@@ -102,13 +102,16 @@ class CSS:
                 else:
                     assert comm == 0, f"Logical X_{i} and Z_{j} should commute."
 
-    def get_logical_representatives(self,):
+    def calc_logical_representatives(self,):
         if self.logical_x_repr is None:
             # Lx = Ker(Gz) / Rowspace(Gx)
             self.logical_x_repr = self._extract_quotient_basis(self.Gz, self.Gx)
         if self.logical_z_repr is None:
             # Lz = Ker(Gx) / Rowspace(Gz)
             self.logical_z_repr = self._extract_quotient_basis(self.Gx, self.Gz)
+    
+    
+
 
     def _find_min_op_weight(self, l_type):
         if l_type == "X":
@@ -156,7 +159,7 @@ class CSS:
 
 
     def calculate_distance(self,):
-        self.get_logical_representatives()
+        self.calc_logical_representatives()
         self.calculate_k()
         # print(self.logical_x_repr)
         # print(self.logical_z_repr)

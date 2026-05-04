@@ -18,6 +18,7 @@ from docplex.mp.progress import ProgressClock
 from core.CSS import CSS, LPCode
 import galois
 import networkx as nx
+from collections import deque
 # ---------------------------------------------------------------------------
 # CodePatch interface
 # ---------------------------------------------------------------------------
@@ -73,7 +74,25 @@ class CodePatch(ABC):
 
     # logical operators는 직접 구현하자.
     # check 만족하는 operator 찾으면 되고, 원하는 logical operator를 고정시키고, 남은 operator를 찾는 부분도 만들자.
-
+    def get_logical_representatives(self, type: str = "X", idx: int = 0) -> list[Qubit]:
+        if self.css is None:
+            self.make_css()
+        if self.css.logical_x_repr is None or self.css.logical_z_repr is None:
+            self.css.calc_logical_representatives()
+        # self.logical_x_repr는 list[Qubit] type이 아니라 0,1들 list임.
+        # list[Qubit]을 리턴해야함!!
+        if type == "X":
+            support = []
+            for j in range(self.css.n):
+                if self.css.logical_x_repr[idx][j] == 1:
+                    support.append(self._data_qubits[j])
+            return support
+        else:
+            support = []
+            for j in range(self.css.n):
+                if self.css.logical_z_repr[idx][j] == 1:
+                    support.append(self._data_qubits[j])
+            return support
 
     # -- gauge (default: same as stabilizer) ---------------------------------
     def gauge_x_checks(self) -> list[Check]:
@@ -666,11 +685,12 @@ class AncillaGraph(CodePatch):
 
                 self._x_checks.append(Check(support, "X", f"X_{v}"))
 
-                # cycle basis에 해당하는게 z check
-                cb = self.cycle_edge_basis()
-                for cycle in cb:
-                    support = frozenset([self._data_qubits[edge] for edge in cycle])
-                    self._z_checks.append(Check(support, "Z", f"Z_cycle_{cycle}"))
+            # cycle basis에 해당하는게 z check
+            cb = self.cycle_edge_basis()
+            # print("cb: ",cb)
+            for cycle in cb:
+                support = frozenset([self._data_qubits[edge] for edge in cycle])
+                self._z_checks.append(Check(support, "Z", f"Z_cycle_{cycle}"))
         else:
             self._x_checks = []
             self._z_checks = []
@@ -704,7 +724,71 @@ class AncillaGraph(CodePatch):
                 edges.append(self.edge_index[(u, v)])
             cycles_e.append(edges)
         
-        return cycles_e    
+        return cycles_e
+    
+    def get_perfect_matching(self, V_s):
+        # self._graph의 vertex subset V_s에 대해 perfect matching을 찾음.
+        # 각 matching의 edge weight들의 최댓값을 minimize
+        k = len(V_s)
+
+        def bfs(src):
+            dist = {src: 0}
+            prev = {src: None}
+            q = deque([src])
+            while q:
+                u = q.popleft()
+                for v in self._graph.neighbors(u):
+                    if v not in dist:
+                        dist[v] = dist[u] + 1
+                        prev[v] = u
+                        q.append(v)
+            return dist, prev
+
+        def get_path(prev, src, dst):
+            path = []
+            u = dst
+            while u != src:
+                path.append(u)
+                u = prev[u]
+            path.append(src)
+            path.reverse()
+            return path
+
+        D = []
+        PREV = []
+        for u in V_s:
+            d, p = bfs(u)
+            D.append([d[v] for v in V_s])
+            PREV.append(p)
+
+        INF = float('inf')
+        dp = [INF] * (1 << k)
+        dp[0] = 0
+        parent = [None] * (1 << k)
+
+        for mask in range((1 << k) - 1):
+            if dp[mask] == INF:
+                continue
+            i = next(b for b in range(k) if not (mask >> b & 1))
+            for j in range(i+1, k):
+                if not (mask >> j & 1):
+                    new_mask = mask | (1 << i) | (1 << j)
+                    val = max(dp[mask], D[i][j])
+                    if val < dp[new_mask]:
+                        dp[new_mask] = val
+                        parent[new_mask] = (i, j)
+
+        matching = []
+        mask = (1 << k) - 1
+        while mask:
+            i, j = parent[mask]
+            path = get_path(PREV[i], V_s[i], V_s[j])
+            edges = list(zip(path, path[1:]))
+            matching.append((V_s[i], V_s[j], edges))
+            mask ^= (1 << i) | (1 << j)
+
+        return matching
+    
     def name(self): return self._name
     def data_qubits(self): return self._data_qubits
     def x_checks(self): return self._x_checks

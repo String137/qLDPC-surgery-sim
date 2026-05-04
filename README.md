@@ -12,10 +12,12 @@
 - https://arxiv.org/pdf/2510.14895 이 논문 Figure 6처럼 X check meas 시작과 끝에 추가하고, detector는 각 round사이로 수동으로 추가하자.
 
 # Link
-- https://arxiv.org/pdf/2410.03628#page=14
-- https://arxiv.org/pdf/2510.14895
-- https://arxiv.org/pdf/2603.05398#page=17.85
-- https://arxiv.org/pdf/2012.04068#page=6
+- [Universal adapters between quantum LDPC codes](https://arxiv.org/pdf/2410.03628#page=14)
+- [Fast and fault-tolerant logical measurements: Auxiliary hypergraphs and transversal surgery](https://arxiv.org/pdf/2510.14895)
+- [QGPU: Parallel logic in quantum LDPC codes](https://arxiv.org/pdf/2603.05398#page=17.85)
+- [Quantum LDPC Codes with Almost Linear
+Minimum Distance](https://arxiv.org/pdf/2012.04068#page=6)
+- [Low-overhead fault-tolerant quantum computation by gauging logical operators](https://arxiv.org/pdf/2410.02213v1)
 
 ## 프로젝트 구조
 
