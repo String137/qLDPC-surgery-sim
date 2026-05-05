@@ -3,8 +3,7 @@
 일반적인 qLDPC 코드에 대한 fault-tolerant surgery를 구현하는 연구 저장소.
 최종 목표는 surface code에 국한되지 않고, **general CSS/qLDPC 코드**에 대한 surgery 회로 생성 및 분석이다.
 
-현재는 `SurfaceCode`를 테스트베드로 사용하며 (`test.py` 참고), `ConePatch` 기반 XX/ZZ surgery 구조를 구현 중이다.
-`surgery_circuit_cl.py`의 `LRCCircuitBuilder`는 LRC 스케줄 CNOT 편성을 담당하지만, 완성된 회로 빌더는 아직 개발 중이다.
+현재는 `SurfaceCode`를 테스트베드로 사용하며 (`test.py` 참고), `test.ipynb`에는 두 개의 LP/LDPC 코드를 auxiliary graph로 merge하는 예시가 포함되어 있다. `ConePatch` 기반 XX/ZZ surgery 구조를 구현 중이며, 현재 ZZ surgery 회로 생성은 `surgery/surgery_circuit.py`의 `SurgeryCircuitBuilder`가 담당한다. `surgery_circuit_cl.py`는 LRC 스케줄 기반 CNOT 편성 프로토타입으로 남아 있다.
 
 
 # TODO
@@ -51,6 +50,7 @@ viz/            — Stim 회로 시각화
 | 클래스 | 역할 |
 |--------|------|
 | `CSS` | CSS 코드의 기반 클래스. `Gx`, `Gz` (generator matrix) 입력 → `get_center()`로 실제 parity-check `Hx`, `Hz` 도출 (null space 소거). `calculate_k()`로 논리 큐빗 수 계산. `get_logical_representatives()`로 logical X/Z operator 추출 (Ker/Rowspace 몫공간). `get_distance()`는 CPLEX ILP로 최소 weight logical operator 계산. |
+| `LPCode` | `CSS` 상속. LP code ring 매트릭스를 `Poly` 다항식으로 구성하고 `to_binary()`로 binary parity-check 행렬을 생성. `Ha`,`Hb`,`R` 입력으로 LP/LDPC code를 표현. |
 | `BBCode` | `CSS` 상속. bivariate bicycle code. `(l, m)` 크기의 cyclic 그리드 위에서 다항식 `a(x,y)`, `b(x,y)`로 `Hx = [A\|B]`, `Hz = [B^T\|A^T]` 생성. `get_col_idx()`로 순환 행렬 인덱스 직접 접근. |
 | `MergedCode` | `CSS` 상속. 두 `BBCode`의 block-diagonal direct sum. `add_edge_qubits()`로 edge qubit(|+⟩ 초기화) 추가. `measure_operator()`로 임의 Pauli operator를 측정하고 anti-commuting check를 정리. |
 
@@ -67,7 +67,10 @@ viz/            — Stim 회로 시각화
 | `SurfaceCode` | 비회전 surface code (unrotated). `(x, y)` 반정수 좌표계. `check2coord` 자동 생성. |
 | `RotatedSurfaceCode` | 회전 surface code (Fowler 2012 convention). distance `d`, `d²` data qubits. bulk/boundary plaquette 자동 생성. `boundary_qubits(side)`로 경계 큐빗 추출. `z_logicals()`, `x_logicals()` 제공. |
 | `TrivialCode` | stabilizer check가 없는 코드 (`k = n`). ancilla 라인 표현에 사용. `direction="vertical"/"horizontal"` 선택 가능. |
+| `LPCodePatch` | `core.CSS.LPCode` 인스턴스를 `CodePatch`로 감싸는 adapter. LP/LDPC ring 코드의 stabilizer checks를 `Check` 리스트로 노출. |
+| `CCCode` | QGPU/quantum LDPC gauge code 구현 실험용 placeholder. 현재 구체 구현은 미완성. |
 | `BBCodePatch` | 외부 `BBCode` 인스턴스를 `CodePatch`로 감싸는 adapter. `Hx`/`Hz` → `Check` list 변환. `load_logicals()`로 logical operator 로드. |
+| `AncillaGraph` | auxiliary graph를 `CodePatch`로 표현. graph vertex를 X 체크로, graph edge를 데이터 큐빗으로 변환하여 `AncillaGraph` 기반 merge/port mapping에 사용. |
 
 ---
 
@@ -78,19 +81,31 @@ viz/            — Stim 회로 시각화
 | `MergedPatch` | patch1 + seam qubits + patch2 를 하나의 `CodePatch`로 합친 merged code. seam check(X/Z)를 받아서 전체 check list를 구성. 내부 `QubitRegistry`를 자체 보유. |
 | `DirectSum` | 두 `CodePatch`의 direct sum. check는 단순 합집합. `ConePatch` 구성 시 내부적으로 사용. |
 | `ConePatch` | homological measurement용 cone code C̃ = cone(f). C1 ⊕ C2 위에 ancilla `A`를 붙여 `f1t`, `f0` check를 추가해 구성. (Ide et al. PRX 2025 eq.13 구조) |
+| `MergedCodeWithGraph` | `AncillaGraph` 기반 auxiliary graph를 사용해 두 LP/LDPC 코드 블록을 merge. logical X support와 ancilla graph perfect matching을 연결해 `ConePatch`를 구성. |
 
 > `MergedPatchWithAncilla`, `build_zz_merged`, `build_xx_merged` 등 seam builder 함수들은 현재 주석 처리(비활성) 상태.
 
 ---
 
-### `surgery/surgery_circuit_cl.py` — LRC 스케줄 CNOT 편성 (개발 중)
+### `surgery/surgery_circuit.py` — ZZ surgery stim circuit
+
+| 클래스 | 역할 |
+|--------|------|
+| `SurgeryCircuitBuilder` | pre / merge / split / post / final 단계로 ZZ surgery stim 회로를 구성. `surface_zz_boundary_pairs_with_ancilla` 기반 seam ancilla를 사용하며 `tqecd` 자동 detector annotation을 지원. |
+| `build_zz_surgery_circuit()` | bare circuit과 annotated circuit을 반환하는 현재 ZZ surgery 실행 경로. |
+
+> `surgery_circuit.py`는 현재 활성화된 ZZ surgery 회로 생성 경로이다. `surgery_circuit_cl.py`는 실험용 LRC 스케줄 프로토타입으로 유지된다.
+
+---
+
+### `surgery/surgery_circuit_cl.py` — LRC 스케줄 CNOT 편성 (프로토타입)
 
 | 클래스 | 역할 |
 |--------|------|
 | `LRCCircuitBuilder` | 단일 코드 패치에 대한 LRC(Left-Right-Circuit) 스케줄 CNOT 편성. data qubit을 left/right로 partition하고 edge coloring으로 각 time step의 CNOT 목록을 결정. `build()`는 미완성(TODO 포함). (Strikis, Browne, Beverland arXiv:2603.05481) |
 | `SurgeryCircuitCL` | ZZ surgery 전 주기(pre → merge → split/post → final readout) stim 회로. 현재 불완전한 상태로 방치 중. |
 
-> `SurgeryCircuitCL`은 현재 사용하지 않는다. LRC 스케줄 기반 회로 빌더는 `LRCCircuitBuilder`를 기반으로 재작성 중이다.
+> `SurgeryCircuitCL`은 현재 사용하지 않는다. `LRCCircuitBuilder`는 LRC 스케줄 기반 회로 편성 실험을 위한 프로토타입이다.
 
 ---
 
@@ -117,11 +132,13 @@ viz/            — Stim 회로 시각화
 
 - `CodePatch`에 `check2coord` 속성 추가: check → 좌표 매핑을 패치 레벨에서 보관. `SurfaceCode._build()`에서 자동 생성.
 - `CodePatch.to_stim_circuit()` 제거(주석 처리): 회로 생성을 별도 빌더로 분리.
-- `LRCCircuitBuilder` 추가: edge coloring 기반 CNOT 스케줄 편성. 회로 빌더 재작성의 기반.
+- `surgery/surgery_circuit.py` 추가: `SurgeryCircuitBuilder` 기반 ZZ surgery stim 회로 생성. bare/annotated 회로를 모두 반환하며 `tqecd` 자동 detector annotation을 지원.
+- `LRCCircuitBuilder` 추가: edge coloring 기반 CNOT 스케줄 편성. LRC 스케줄형 회로 편성 프로토타입으로 유지.
 - `ConePatch`, `DirectSum` 추가 (homological measurement 기반 qLDPC surgery 구현용).
+- `MergedCodeWithGraph`, `AncillaGraph` 추가: auxiliary graph 기반 LP/LDPC 코드 merge 지원.
 - `build_xx_cone_surface()` 추가: `SurfaceCode` 두 개와 ancilla로 XX cone surgery 구성.
 - `MergedPatchWithAncilla`, seam builder 함수들 주석 처리(비활성).
-- `SurgeryCircuitCL` 방치 — 재작성 예정.
+- `SurgeryCircuitCL` 방치 — 실험용 프로토타입.
 
 - viz/visualize_surgery.py
   - phase/round 단위 stabilizer 배치 시각화.

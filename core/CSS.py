@@ -11,6 +11,43 @@ import networkx as nx
 import matplotlib.pyplot as plt
 from itertools import combinations
 from sympy import Poly, symbols
+
+def solve_gf2(A: galois.FieldArray, b: galois.FieldArray):
+    """
+    Ax = b over GF(2)
+    Returns: (particular_solution, null_space_basis)
+             particular_solution이 None이면 해 없음
+    """
+    GF2 = type(A)
+    m, n = A.shape
+
+    # augmented matrix [A | b]
+    Ab = GF2(np.hstack([A, b.reshape(-1, 1)]))
+    rref = Ab.row_reduce()
+
+    # pivot columns 찾기
+    pivots = {}
+    for i in range(m):
+        for j in range(n):
+            if rref[i, j] == 1:
+                pivots[i] = j
+                break
+
+    # consistency check: non-pivot row에서 b 열이 1이면 해 없음
+    for i in range(m):
+        if i not in pivots and rref[i, -1] == 1:
+            return None, None
+
+    # particular solution: free variable = 0
+    x_particular = GF2(np.zeros(n, dtype=int))
+    for i, j in pivots.items():
+        x_particular[j] = rref[i, -1]
+
+    # null space basis (homogeneous solution)
+    x_null = A.null_space()
+
+    return x_particular, x_null
+
 class CSS:
     def __init__(self, Gx, Gz):
         self.n = Gx.shape[1]
@@ -19,8 +56,8 @@ class CSS:
         self.F = galois.GF(2) # Field
         self.get_center()
         self.k = self.calculate_k()
-        self.logical_x_repr = None    # X logical representatives
-        self.logical_z_repr = None    # Z logical representatives
+        self.logical_x_repr = [None] * self.k    # X logical representatives
+        self.logical_z_repr = [None] * self.k    # Z logical representatives
         self.d = None
         self.dx = None
         self.dz = None
@@ -78,9 +115,105 @@ class CSS:
     def commutativity_check(self,):
         # Hx @ Hz^T == 0 이어야 함.
         if not np.all(np.dot(self.Hx, self.Hz.T) == 0):
-            re
+            return False
         else:
             return True
+
+    def set_logical_representative(self, type: str, idx: int, repr_vec: list[int]):
+        if type == "X":
+            # repr_vec가 Gz와 commute하는지, Gx의 row space에 없는지 확인
+            assert np.all(np.dot(repr_vec, self.Gz.T) == 0), "Logical representative should commute with all Z-checks."
+            assert np.linalg.matrix_rank(self.F(np.vstack((self.Gx, repr_vec)))) > np.linalg.matrix_rank(self.F(self.Gx)), "Logical representative should not be in the row space of Gx."
+            # Z-logic representatives와의 anti-commute, commute 조건 체크 (None이 아닌 것들에 한해서)
+            for j in range(self.k):
+                if self.logical_z_repr[j] is not None:
+                    comm = np.dot(repr_vec, self.logical_z_repr[j])
+                    if idx == j:
+                        assert comm == 1, f"Logical X_{idx} and Z_{j} should anti-commute."
+                    else:
+                        assert comm == 0, f"Logical X_{idx} and Z_{j} should commute."
+            self.logical_x_repr[idx] = self.F(repr_vec)
+        elif type == "Z":
+            # repr_vec가 Gx와 commute하는지, Gz의 row space에 없는지 확인
+            assert np.all(np.dot(repr_vec, self.Gx.T) == 0), "Logical representative should commute with all X-checks."
+            assert np.linalg.matrix_rank(self.F(np.vstack((self.Gz, repr_vec)))) > np.linalg.matrix_rank(self.F(self.Gz)), "Logical representative should not be in the row space of Gz."
+            # X-logic representatives와의 anti-commute, commute 조건 체크 (None이 아닌 것들에 한해서)
+            for j in range(self.k):
+                if self.logical_x_repr[j] is not None:
+                    comm = np.dot(repr_vec, self.logical_x_repr[j])
+                    if idx == j:
+                        assert comm == 1, f"Logical Z_{idx} and X_{j} should anti-commute."
+                    else:
+                        assert comm == 0, f"Logical Z_{idx} and X_{j} should commute."
+            self.logical_z_repr[idx] = self.F(repr_vec)
+        else:
+            raise ValueError("Invalid logical operator type. Expected 'X' or 'Z'.")
+    
+    def is_complete_logical_set(self,):
+        # logical representatives가 모두 채워져 있는지 확인
+        for i in range(self.k):
+            if self.logical_x_repr[i] is None or self.logical_z_repr[i] is None:
+                return False
+        return True
+
+    def set_missing_logicals(self,):
+        # logical representatives 중에서 None인 것들 찾아서 채워넣음.
+        # dual logical operator가 None이 아닌 것 우선으로!
+        for i in range(self.k):
+            # dual이 None이 아닌 경우 우선 처리
+            if self.logical_x_repr[i] is None and self.logical_z_repr[i] is not None:
+                self._set_missing_logical("X", i)
+            if self.logical_z_repr[i] is None and self.logical_x_repr[i] is not None:
+                self._set_missing_logical("Z", i)
+        # dual도 None인 경우 처리
+        for i in range(self.k):
+            if self.logical_x_repr[i] is None:
+                self._set_missing_logical("X", i)
+            if self.logical_z_repr[i] is None:
+                self._set_missing_logical("Z", i)
+
+    def _set_missing_logical(self, type:str, idx:int):
+        # dual logical operator가 None이라면 dual check와 commute하고 primal check의 span에 안들어가는 것 찾음.
+        if type == "X":
+            G_opp = self.Gz
+            G_self = self.Gx
+            primal_logic_ops = self.logical_x_repr
+            dual_logic_ops = self.logical_z_repr    # 적어도 하나의 Z-logic op과 anti-commute해야 non-trivial logical op.임.
+        elif type == "Z":
+            G_opp = self.Gx
+            G_self = self.Gz
+            primal_logic_ops = self.logical_z_repr
+            dual_logic_ops = self.logical_x_repr
+        A = G_opp
+        b = self.F.Zeros((G_opp.shape[0],), dtype=int)
+        for primal_op in primal_logic_ops:
+            if primal_op is not None:
+                A = np.vstack((A, primal_op))
+                b = np.hstack((b, self.F(0)))
+        for i, dual_op in enumerate(dual_logic_ops):
+            if dual_op is not None:
+                A = np.vstack((A, dual_op))
+                if i == idx:
+                    b = np.hstack((b, self.F(1)))
+                else:
+                    b = np.hstack((b, self.F(0)))
+        
+        # Ax=b 의 nullspace의 basis중에 G_self의 row space에 없는 것 찾기 (반드시 존재함)
+        x_part, x_null = solve_gf2(A, b)
+        # x_part는 row vector
+        # x_null의 행이 해
+        for row in x_null:
+            x = x_part + row
+            # G_self의 row space에 없는지 확인
+            if np.linalg.matrix_rank(self.F(np.vstack((G_self, x)))) == G_self.shape[0] + 1:
+                # print("Found missing logical operator:", x)
+                if type == "X":
+                    self.logical_x_repr[idx] = self.F(x)
+                elif type == "Z":
+                    self.logical_z_repr[idx] = self.F(x)
+                return
+            
+
 
     def set_logical_representatives(self, logical_x_repr: list[list], logical_z_repr: list[list]):
         self.logical_x_repr = self.F(logical_x_repr)
@@ -103,6 +236,8 @@ class CSS:
                     assert comm == 0, f"Logical X_{i} and Z_{j} should commute."
 
     def calc_logical_representatives(self,):
+        # logical X, Z commutation relation 만족하지 않을 수 있음
+        # distance 계산에만 유효
         if self.logical_x_repr is None:
             # Lx = Ker(Gz) / Rowspace(Gx)
             self.logical_x_repr = self._extract_quotient_basis(self.Gz, self.Gx)
@@ -111,6 +246,7 @@ class CSS:
             self.logical_z_repr = self._extract_quotient_basis(self.Gx, self.Gz)
     
     
+
 
 
     def _find_min_op_weight(self, l_type):
