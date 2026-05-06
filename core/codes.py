@@ -74,7 +74,7 @@ class CodePatch(ABC):
 
     # logical operators는 직접 구현하자.
     # check 만족하는 operator 찾으면 되고, 원하는 logical operator를 고정시키고, 남은 operator를 찾는 부분도 만들자.
-    def get_logical_representatives(self, type: str = "X", idx: int = 0) -> list[Qubit]:
+    def get_logical_representative(self, type: str = "X", idx: int = 0) -> list[Qubit]:
         if self.css is None:
             self.make_css()
         if self.css.logical_x_repr is None or self.css.logical_z_repr is None:
@@ -577,10 +577,11 @@ class TrivialCode(CodePatch):
 
 
 class LPCodePatch(CodePatch):
-    def __init__(self, css: LPCode, patch_name: str = "lp", offset=(0.0, 0.0)):
+    def __init__(self, css: LPCode, patch_name: str = "lp", offset=(0.0, 0.0), scale=(1,1)):
         super().__init__(offset)
         self._name = patch_name
         self.set_css(css)
+        self.scale = scale
         
     
     def name(self) -> str:
@@ -588,8 +589,48 @@ class LPCodePatch(CodePatch):
     def data_qubits(self) -> list[Qubit]: return self._data_qubits
     def x_checks(self) -> list[Check]:    return self._x_checks
     def z_checks(self) -> list[Check]:    return self._z_checks
-    def local_coord(self, q):
-        raise NotImplementedError("LPCodePatch does not have a natural geometry")
+    def local_coord(self, q: Qubit):
+        ra = len(self.css.Ha)
+        ca = len(self.css.Ha[0])
+        rb = len(self.css.Hb)
+        cb = len(self.css.Hb[0])
+        p = self.css.l  # ring size
+        scale_x, scale_y = self.scale
+        idx = self.get_idx(q)
+        if idx < ca*rb*p:
+            # left sector
+            x = idx // (rb*p)
+            y = (idx % (rb*p))
+            return (x*scale_x, y*scale_y)
+        else:
+            # right sector
+            idx -= ca*rb*p
+            x = idx // (cb*p)
+            y = (idx % (cb*p))
+            return ((x + ca)*scale_x, (y + rb*p)*scale_y)
+
+
+    
+    # check의 좌표
+    def local_coord_chk(self, typ:str, idx:int):
+        ra = len(self.css.Ha)
+        ca = len(self.css.Ha[0])
+        rb = len(self.css.Hb)
+        cb = len(self.css.Hb[0])
+        p = self.css.l  # ring size
+        scale_x, scale_y = self.scale
+        if typ == "X":
+            assert idx < ra*rb*p, "X check index out of range"
+            x = idx // (rb*p)
+            y = (idx % (rb*p))
+            return ((y + ca)*scale_x, x*scale_y)
+        elif typ == "Z":
+            assert idx < ca*cb*p, "Z check index out of range"
+            x = idx // (cb*p)
+            y = (idx % (cb*p))
+            return (x*scale_x, (y + rb*p)*scale_y)
+        else:
+            raise ValueError("typ must be 'X' or 'Z'")
 
 
 class CCCode(CodePatch):

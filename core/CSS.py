@@ -172,14 +172,15 @@ class CSS:
             if self.logical_z_repr[i] is None:
                 self._set_missing_logical("Z", i)
 
-    def _set_missing_logical(self, type:str, idx:int):
+    def _set_missing_logical(self, typ:str, idx:int):
         # dual logical operator가 None이라면 dual check와 commute하고 primal check의 span에 안들어가는 것 찾음.
-        if type == "X":
+        print(f"set logical {typ} {idx}")
+        if typ == "X":
             G_opp = self.Gz
             G_self = self.Gx
             primal_logic_ops = self.logical_x_repr
             dual_logic_ops = self.logical_z_repr    # 적어도 하나의 Z-logic op과 anti-commute해야 non-trivial logical op.임.
-        elif type == "Z":
+        elif typ == "Z":
             G_opp = self.Gx
             G_self = self.Gz
             primal_logic_ops = self.logical_z_repr
@@ -200,16 +201,18 @@ class CSS:
         
         # Ax=b 의 nullspace의 basis중에 G_self의 row space에 없는 것 찾기 (반드시 존재함)
         x_part, x_null = solve_gf2(A, b)
+        print("x_part: ", x_part)
+        print("x_null: ", x_null)
         # x_part는 row vector
         # x_null의 행이 해
         for row in x_null:
             x = x_part + row
             # G_self의 row space에 없는지 확인
-            if np.linalg.matrix_rank(self.F(np.vstack((G_self, x)))) == G_self.shape[0] + 1:
+            if np.linalg.matrix_rank(self.F(np.vstack((G_self, x)))) == np.linalg.matrix_rank(self.F(G_self)) + 1:
                 # print("Found missing logical operator:", x)
-                if type == "X":
+                if typ == "X":
                     self.logical_x_repr[idx] = self.F(x)
-                elif type == "Z":
+                elif typ == "Z":
                     self.logical_z_repr[idx] = self.F(x)
                 return
             
@@ -246,10 +249,44 @@ class CSS:
             self.logical_z_repr = self._extract_quotient_basis(self.Gx, self.Gz)
     
     
+    def _minimize_logical_op(self, l_type, support: galois.FieldArray):
+        # l_type, support를 가지는 logical operator를 같은 type check곱해서 weight 최소화
+        if l_type == "X":
+            G_self = self.Gx
+        elif l_type == "Z":
+            G_self = self.Gz
+        
+        G = np.array(G_self, dtype=int)
+        s = np.array(support, dtype=int)
+        m, n = G.shape  # m: stabilizer 수, n: 큐비트 수
+
+        model = Model(name="minimize_logical_op")
+
+        # 변수
+        r = model.binary_var_list(m, name="r")   # 어떤 stabilizer를 XOR할지
+        y = model.binary_var_list(n, name="y")   # 결과 비트
+        z = model.integer_var_list(n, lb=0, name="z")  # mod 2 slack
+
+        # 제약: y[j] ≡ s[j] + sum_i G[i,j]*r[i]  (mod 2)
+        for j in range(n):
+            lhs = s[j] + model.sum(int(G[i, j]) * r[i] for i in range(m))
+            model.add_constraint(lhs == y[j] + 2 * z[j])
+
+        # 목적함수
+        model.minimize(model.sum(y))
+
+        sol = model.solve()
+        print(sol.solve_details.status)
+        if sol:
+            result = np.array([int(sol.get_value(y[j])) for j in range(n)])
+            return galois.GF(2)(result)
+        else:
+            return None
 
 
 
     def _find_min_op_weight(self, l_type):
+        # l_type의 모든 logical operator 중 (up to multiplication with checks) 최소 weight
         if l_type == "X":
             G_opp = self.Gz
             G_self = self.Gx
