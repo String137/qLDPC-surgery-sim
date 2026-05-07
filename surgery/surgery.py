@@ -330,9 +330,9 @@ class ConePatch(CodePatch):
         self._registry.register(a_qubits)
 
         self.patch_name_dict = {
-            C1.name: C1,
-            C2.name: C2,
-            A.name: A
+            C1._name: C1,
+            C2._name: C2,
+            A._name: A
         }
 
         partial0 = A.z_checks() if A.z_checks() else []
@@ -365,7 +365,7 @@ class ConePatch(CodePatch):
 
     def local_coord(self, q: Qubit) -> tuple[float, float]:
         # ConePatch에서의 local_coord
-        lx, ly = q._local_coord()
+        lx, ly = self.patch_name_dict[q.patch_name].local_coord(q)
         ox, oy = self.patch_name_dict[q.patch_name]._offset
         return lx + ox, ly + oy
 

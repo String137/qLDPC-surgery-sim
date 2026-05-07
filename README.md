@@ -3,7 +3,7 @@
 일반적인 qLDPC 코드에 대한 fault-tolerant surgery를 구현하는 연구 저장소.
 최종 목표는 surface code에 국한되지 않고, **general CSS/qLDPC 코드**에 대한 surgery 회로 생성 및 분석이다.
 
-현재는 `SurfaceCode`를 테스트베드로 사용하며 (`test.py` 참고), `test.ipynb`에는 두 개의 LP/LDPC 코드를 auxiliary graph로 merge하는 예시가 포함되어 있다. `ConePatch` 기반 XX/ZZ surgery 구조를 구현 중이며, 현재 ZZ surgery 회로 생성은 `surgery/surgery_circuit.py`의 `SurgeryCircuitBuilder`가 담당한다. `surgery_circuit_cl.py`는 LRC 스케줄 기반 CNOT 편성 프로토타입으로 남아 있다.
+현재는 `SurfaceCode`를 테스트베드로 사용하며 (`test.py` 참고), `test.ipynb`에는 두 개의 LP/LDPC 코드를 auxiliary graph로 merge하는 예시가 포함되어 있다. `ConePatch` 기반 XX/ZZ surgery 구조를 구현 중이며, 현재 ZZ surgery 회로 생성은 `surgery/surgery_circuit.py`의 `SurgeryCircuitBuilder`가 담당한다. `surgery/surgery_circuit_cl.py`는 LRC 스케줄 기반 CNOT 편성 프로토타입이며, `surgery/surgery_circuit_default.py`는 이 구조를 기반으로 하되 인접 timestep 사이마다 detector를 정의하고 phenomenological error model에 집중하는 기본 경로로 설정되어 있다.
 
 
 # TODO
@@ -94,7 +94,7 @@ viz/            — Stim 회로 시각화
 | `SurgeryCircuitBuilder` | pre / merge / split / post / final 단계로 ZZ surgery stim 회로를 구성. `surface_zz_boundary_pairs_with_ancilla` 기반 seam ancilla를 사용하며 `tqecd` 자동 detector annotation을 지원. |
 | `build_zz_surgery_circuit()` | bare circuit과 annotated circuit을 반환하는 현재 ZZ surgery 실행 경로. |
 
-> `surgery_circuit.py`는 현재 활성화된 ZZ surgery 회로 생성 경로이다. `surgery_circuit_cl.py`는 실험용 LRC 스케줄 프로토타입으로 유지된다.
+> `surgery_circuit.py`는 현재 활성화된 ZZ surgery 회로 생성 경로이다. `surgery_circuit_cl.py`는 실험용 LRC 스케줄 프로토타입으로 유지되며, detector auto 탐색(`analysis/detector.py`)과 인접 timestep 간 detector 정의를 활용한다. `surgery_circuit_default.py`는 이 구조를 기반으로 하되 기본 경로에서는 phenomenological error model만 고려하도록 설계되어 있다.
 
 ---
 
@@ -106,6 +106,14 @@ viz/            — Stim 회로 시각화
 | `SurgeryCircuitCL` | ZZ surgery 전 주기(pre → merge → split/post → final readout) stim 회로. 현재 불완전한 상태로 방치 중. |
 
 > `SurgeryCircuitCL`은 현재 사용하지 않는다. `LRCCircuitBuilder`는 LRC 스케줄 기반 회로 편성 실험을 위한 프로토타입이다.
+
+---
+
+### `surgery/surgery_circuit_default.py` — default phenomenological surgery circuit
+
+`SurgeryCircuitCL`와 유사한 LRC 기반 회로 구조를 따르지만, detector를 인접 timestep 사이마다 명시적으로 정의하고 기본 경로에서는 phenomenological error model만 고려하는 회로 변형이다.
+
+> `surgery_circuit_default.py`는 `surgery_circuit_cl.py` 기반이지만, 이 저장소의 기본 시뮬레이션 경로로 phenomenological noise model에 집중하고 detector auto annotation을 별도 경로로 처리한다.
 
 ---
 

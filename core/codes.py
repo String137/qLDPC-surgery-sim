@@ -835,4 +835,6 @@ class AncillaGraph(CodePatch):
     def x_checks(self): return self._x_checks
     def z_checks(self): return self._z_checks
     def local_coord(self, q):
-        return q.local_coord
+        x, y = q.local_coord
+        return (x * self.scale[0], y * self.scale[1])
+        
