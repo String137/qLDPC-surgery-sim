@@ -57,8 +57,8 @@ class CodePatch(ABC):
         for i in range(css.Hz.shape[0]):
             support = frozenset(self._data_qubits[j] for j in range(css.n) if css.Hz[i, j] == 1)
             self._z_checks.append(Check(support, "Z", f"Z_{i}"))
-        # if css.logical_x_repr is not None and css.logical_z_repr is not None:
-        #     self.set_logicals(css.logical_x_repr, css.logical_z_repr)
+        if css.logical_x_repr is not None and css.logical_z_repr is not None:
+            self.set_logicals(css.logical_x_repr, css.logical_z_repr)
 
 
     def set_logicals(self, lx: list[list[int]], lz: list[list[int]]):

@@ -30,7 +30,7 @@ class CircuitBuilder:
     """
 
     def __init__(self, schedule: CircuitSchedule):
-        self.meas_record = {}  # global_meas_idx -> {tick, qubits, label, check}
+        self.meas_record = {}  # global_meas_idx -> {tick, gate, qubits, label, check}
         self._circuit = stim.Circuit()
         self._qubit_idx = {q: i for i, q in enumerate(sorted(schedule.qubits))}
         self._schedule = schedule
@@ -72,6 +72,7 @@ class CircuitBuilder:
                 for i, check in enumerate(instr.targets):
                     self.meas_record[meas_count_before + i] = {
                         "tick": instr.tick,
+                        "gate": instr.gate,
                         "qubits": sorted(check.qubits),
                         "label": instr.label,
                         "check": check,
@@ -80,6 +81,7 @@ class CircuitBuilder:
                 for i, qubit in enumerate(instr.targets):
                     self.meas_record[meas_count_before + i] = {
                         "tick": instr.tick,
+                        "gate": instr.gate,
                         "qubits": [qubit],
                         "label": instr.label,
                         "check": instr.check,
@@ -87,11 +89,11 @@ class CircuitBuilder:
 
         self._circuit.append(instr.gate, stim_targets, instr.gate_args)
 
-    def get_rec(self, tick: int = None, qubit: Qubit = None, label: str = None, check: Check = None) -> list[stim.GateTarget]:
-        res = self.get_meas_idx(tick, qubit, label, check)
+    def get_rec(self, tick: int = None, qubit: Qubit = None, label: str = None, check: Check = None, gate: str = None) -> list[stim.GateTarget]:
+        res = self.get_meas_idx(tick, qubit, label, check, gate)
         return [stim.target_rec(r - len(self.meas_record)) for r in res]
 
-    def get_meas_idx(self, tick: int = None, qubit: Qubit = None, label: str = None, check: Check = None) -> list[int]:
+    def get_meas_idx(self, tick: int = None, qubit: Qubit = None, label: str = None, check: Check = None, gate: str = None) -> list[int]:
         res = []
         for idx, entry in self.meas_record.items():
             if tick is not None and entry["tick"] != tick:
@@ -102,15 +104,17 @@ class CircuitBuilder:
                 continue
             if check is not None and entry["check"] != check:
                 continue
+            if gate is not None and entry["gate"] != gate:
+                continue
             res.append(idx)
         return res
 
-    def add_detectors(self,):
+    def add_detectors(self):
         check_to_meas = defaultdict(list)
         for idx, entry in self.meas_record.items():
             if entry['check'] is not None:
                 check_to_meas[entry['check']].append((entry['tick'], idx))
-        
+
         for check, meas_list in check_to_meas.items():
             meas_list.sort()
             for i in range(1, len(meas_list)):
@@ -121,11 +125,11 @@ class CircuitBuilder:
                     stim.target_rec(prev_idx - len(self.meas_record)),
                 ]
                 self._circuit.append('DETECTOR', recs)
-    
-    def add_observable(self, supports: list[list[Qubit]]):
+
+    def add_observables(self, supports: list[list[Qubit]]):
         final_data_idxs = self.get_meas_idx(label='final_data')
         qubit_to_final_idx = {self.meas_record[idx]['qubits'][0]: idx for idx in final_data_idxs}
-        
+
         for obs_idx, support in enumerate(supports):
             obs_recs = [
                 stim.target_rec(qubit_to_final_idx[q] - len(self.meas_record))
