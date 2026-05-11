@@ -44,14 +44,20 @@ class MemoryCircuitScheduler:
         # tick 2 ~ rounds: DEPOLARIZE1 + MPP X+Z checks (noisy)
         for r in range(1, self.rounds+1):
             schedule.instructions[tick].append(
-                Instruction(tick, "DEPOLARIZE1", data_qubits, gate_args=[self.p_data])
+                Instruction(tick, "Z_ERROR", data_qubits, gate_args=[self.p_data])
+            )
+            schedule.instructions[tick].append(
+                Instruction(tick, "X_ERROR", data_qubits, gate_args=[self.p_data])
             )
             schedule.instructions[tick].append(
                 Instruction(tick, "MPP", x_checks + z_checks, gate_args=[self.p_meas], label=f"round_{r}")
             )
             tick += 1
 
-        # 마지막 round: noiseless MPP X checks only + MX data qubits
+        # 마지막 round: data Z error + noiseless MPP X checks only + MX data qubits
+        schedule.instructions[tick].append(
+            Instruction(tick, "Z_ERROR", data_qubits, gate_args=[self.p_data])
+        )
         schedule.instructions[tick].append(
             Instruction(tick, "MPP", x_checks, gate_args=[self.p_meas], label="final")
         )
