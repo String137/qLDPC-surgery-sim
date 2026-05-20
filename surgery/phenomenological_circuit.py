@@ -32,12 +32,12 @@ class MemoryCircuitScheduler:
         )
         tick += 1
 
-        # tick 1: DEPOLARIZE1 + MPP X checks only (noisy, label="round_0")
+        # tick 1: MPP X checks only (noisy, label="round_0")
         # schedule.instructions[tick].append(
         #     Instruction(tick, "DEPOLARIZE1", data_qubits, gate_args=[self.p_data])
         # )
         schedule.instructions[tick].append(
-            Instruction(tick, "MPP", x_checks, gate_args=[self.p_meas], label="round_0")
+            Instruction(tick, "MPP", x_checks, gate_args=[0], label="round_0")
         )
         tick += 1
 
@@ -59,7 +59,7 @@ class MemoryCircuitScheduler:
             Instruction(tick, "Z_ERROR", data_qubits, gate_args=[self.p_data])
         )
         schedule.instructions[tick].append(
-            Instruction(tick, "MPP", x_checks, gate_args=[self.p_meas], label="final")
+            Instruction(tick, "MPP", x_checks, gate_args=[0], label="final")
         )
         schedule.instructions[tick].append(
             Instruction(tick, "MX", data_qubits, gate_args=[0], label="final_data")

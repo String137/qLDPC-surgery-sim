@@ -120,6 +120,7 @@ class CSS:
             return True
 
     def set_logical_representative(self, type: str, idx: int, repr_vec: list[int]):
+        repr_vec = self.F(repr_vec)
         if type == "X":
             # repr_vec가 Gz와 commute하는지, Gx의 row space에 없는지 확인
             assert np.all(np.dot(repr_vec, self.Gz.T) == 0), "Logical representative should commute with all Z-checks."
@@ -132,7 +133,7 @@ class CSS:
                         assert comm == 1, f"Logical X_{idx} and Z_{j} should anti-commute."
                     else:
                         assert comm == 0, f"Logical X_{idx} and Z_{j} should commute."
-            self.logical_x_repr[idx] = self.F(repr_vec)
+            self.logical_x_repr[idx] = repr_vec
         elif type == "Z":
             # repr_vec가 Gx와 commute하는지, Gz의 row space에 없는지 확인
             assert np.all(np.dot(repr_vec, self.Gx.T) == 0), "Logical representative should commute with all X-checks."
@@ -145,7 +146,7 @@ class CSS:
                         assert comm == 1, f"Logical Z_{idx} and X_{j} should anti-commute."
                     else:
                         assert comm == 0, f"Logical Z_{idx} and X_{j} should commute."
-            self.logical_z_repr[idx] = self.F(repr_vec)
+            self.logical_z_repr[idx] = repr_vec
         else:
             raise ValueError("Invalid logical operator type. Expected 'X' or 'Z'.")
     
@@ -219,11 +220,12 @@ class CSS:
 
 
     def set_logical_representatives(self, logical_x_repr: list[list], logical_z_repr: list[list]):
-        self.logical_x_repr = self.F(logical_x_repr)
-        self.logical_z_repr = self.F(logical_z_repr)
-        assert self.logical_x_repr.shape[0] == self.k, "Number of logical X representatives must be equal to k."
-        assert self.logical_z_repr.shape[0] == self.k, "Number of logical Z representatives must be equal to k."
         
+
+        assert len(logical_x_repr) == self.k, "Number of logical X representatives must be equal to k."
+        assert len(logical_z_repr) == self.k, "Number of logical Z representatives must be equal to k."
+        self.logical_x_repr = [self.F(op) for op in logical_x_repr]
+        self.logical_z_repr = [self.F(op) for op in logical_z_repr]
         # check 만족하는지 확인
         for i in range(self.k):
             assert np.all(np.dot(self.logical_x_repr[i], self.Gz.T) == 0), f"Logical X_{i} should commute with all Z-checks."
@@ -308,11 +310,11 @@ class CSS:
         # Commute with G_opp
         # G_opp @ e = 0 (mod 2)
         for j in range(G_opp.shape[0]):
-            model.add_constraint(model.sum(int(G_opp[j,i])*e[i] for i in range(self.n)) == 2*z_comm[j])
+            model.add_constraint(model.sum(int(G_opp[j][i])*e[i] for i in range(self.n)) == 2*z_comm[j])
 
         # Logical syndrome (anti_logic_ops[j]랑 anti-commute하는지?)
         for j in range(self.k):
-            lhs = model.sum(int(anti_logic_ops[j,i])*e[i] for i in range(self.n))
+            lhs = model.sum(int(anti_logic_ops[j][i])*e[i] for i in range(self.n))
             model.add_constraint(lhs == 2*z_coset[j] + s[j])
 
         # Non-triviality:
@@ -454,8 +456,76 @@ class LPCode(CSS):
                 result[i*l:(i+1)*l, j*l:(j+1)*l] = self.poly_to_matrix(M[i][j])
         return result
     
+class RotatedSurfaceCode(CSS):
+
+    def __init__(self, d: int):
+        assert d%2==1
+        self.n = d**2
+        self.d = d
+        Hx = []
+        Hz = []
+        # Z-check
+        # upper boundary
+        for x in range(0,d-1,2):
+            chk = [0]*self.n
+            chk[self._coord2idx(x,0)] = 1
+            chk[self._coord2idx(x+1,0)] = 1
+            Hz.append(chk)
+        # inside
+        for y in range(0,d-1):
+            if y%2==0:
+                start=1
+            else:
+                start=0
+            for x in range(start,d-1,2):
+                chk = [0]*self.n
+                chk[self._coord2idx(x,y)] = 1
+                chk[self._coord2idx(x+1,y)] = 1
+                chk[self._coord2idx(x,y+1)] = 1
+                chk[self._coord2idx(x+1,y+1)] = 1
+                Hz.append(chk)
+        # lower boundary
+        for x in range(1,d-1,2):
+            chk = [0]*self.n
+            chk[self._coord2idx(x,d-1)] = 1
+            chk[self._coord2idx(x+1,d-1)] = 1
+            Hz.append(chk)
+        # X-check
+        for y in range(0,d-1):
+            if y%2 == 0:
+                for x in range(0,d-1,2):
+                    chk = [0]*self.n
+                    chk[self._coord2idx(x,y)] = 1
+                    chk[self._coord2idx(x+1,y)] = 1
+                    chk[self._coord2idx(x,y+1)] = 1
+                    chk[self._coord2idx(x+1,y+1)] = 1
+                    Hx.append(chk)
+                # right boundary
+                chk = [0]*self.n
+                chk[self._coord2idx(d-1,y)] = 1
+                chk[self._coord2idx(d-1,y+1)] = 1
+                Hx.append(chk)
+            else:
+                # left boundary
+                chk = [0]*self.n
+                chk[self._coord2idx(0,y)] = 1
+                chk[self._coord2idx(0,y+1)] = 1
+                Hx.append(chk)
+
+                for x in range(1,d-1,2):
+                    chk = [0]*self.n
+                    chk[self._coord2idx(x,y)] = 1
+                    chk[self._coord2idx(x+1,y)] = 1
+                    chk[self._coord2idx(x,y+1)] = 1
+                    chk[self._coord2idx(x+1,y+1)] = 1
+                    Hx.append(chk)
+        
+        super().__init__(galois.GF(2)(np.array(Hx)),galois.GF(2)(np.array(Hz)))
 
 
+    def _coord2idx(self, x: int, y: int) -> int:
+        # x,y = 0,1,...,d-1
+        return self.d*y+x
 
 #####################
 

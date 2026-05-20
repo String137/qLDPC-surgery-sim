@@ -15,7 +15,7 @@ import numpy as np
 from core.primitives import Qubit, Check, QubitRegistry
 from docplex.mp.model import Model
 from docplex.mp.progress import ProgressClock
-from core.CSS import CSS, LPCode
+from core.CSS import CSS, LPCode, RotatedSurfaceCode
 import galois
 import networkx as nx
 from collections import deque
@@ -164,107 +164,6 @@ class CodePatch(ABC):
     def set_check2coord(self, check2coord: dict):
         # check2coord는 check → (x,y) 좌표 매핑. surgery에서 ancilla 배치할 때 필요.
         self.check2coord = check2coord
-    
-    # def to_stim_circuit(
-    #     self,
-    #     *,
-    #     reg: QubitRegistry,
-    #     rounds: int,
-    #     p_data: float,
-    #     p_meas: float,
-    #     basis: str = "Z",           # "X", "Z", "both"
-    #     first_round: bool = True,
-    #     last_round: bool = False,
-    # ):
-    #     """
-    #     주어진 QubitRegistry 기준으로 stim circuit 생성.
-    #     reg는 외부에서 주입 — merged code일 때 global registry 공유.
-    #     """
-    #     import stim
-
-    #     do_x = basis in ("X", "both")
-    #     do_z = basis in ("Z", "both")
-
-    #     x_chks = self.x_checks() if do_x else []
-    #     z_chks = self.z_checks() if do_z else []
-
-    #     n_data = len(reg)
-    #     # ancilla indices: data qubits 이후에 배치
-    #     # X ancillas: n_data .. n_data + len(x_chks) - 1
-    #     # Z ancillas: n_data + len(x_chks) .. end
-    #     x_anc = list(range(n_data, n_data + len(x_chks)))
-    #     z_anc = list(range(n_data + len(x_chks),
-    #                        n_data + len(x_chks) + len(z_chks)))
-
-    #     circuit = stim.Circuit()
-
-    #     if first_round:
-    #         all_qubits = list(range(n_data + len(x_chks) + len(z_chks)))
-    #         circuit.append("R", all_qubits)
-
-    #     prev_x_meas_count = 0
-    #     prev_z_meas_count = 0
-
-    #     for t in range(rounds):
-    #         # Data errors
-    #         if p_data > 0:
-    #             data_indices = list(range(n_data))
-    #             circuit.append("X_ERROR", data_indices, p_data)
-    #             circuit.append("Z_ERROR", data_indices, p_data)
-
-    #         # -- X stabilizers -----------------------------------------------
-    #         if do_x:
-    #             circuit.append("R", x_anc)
-    #             for ai, chk in enumerate(x_chks):
-    #                 anc = x_anc[ai]
-    #                 circuit.append("H", [anc])
-    #                 for q in sorted(reg.check_to_indices(chk)):
-    #                     circuit.append("CNOT", [anc, q])
-    #                 circuit.append("H", [anc])
-    #             if p_meas > 0:
-    #                 circuit.append("X_ERROR", x_anc, p_meas)
-    #             circuit.append("M", x_anc)
-
-    #             for ai in range(len(x_chks)):
-    #                 rec_cur = stim.target_rec(-(len(x_chks) - ai))
-    #                 if t == 0:
-    #                     circuit.append("DETECTOR", [rec_cur], [ai, 0, t])
-    #                 else:
-    #                     rec_prev = stim.target_rec(
-    #                         -(len(x_chks) - ai) - len(x_chks))
-    #                     circuit.append("DETECTOR",
-    #                                    [rec_cur, rec_prev], [ai, 0, t])
-
-    #         # -- Z stabilizers -----------------------------------------------
-    #         if do_z:
-    #             circuit.append("R", z_anc)
-    #             for ai, chk in enumerate(z_chks):
-    #                 anc = z_anc[ai]
-    #                 for q in sorted(reg.check_to_indices(chk)):
-    #                     circuit.append("CNOT", [q, anc])
-    #             if p_meas > 0:
-    #                 circuit.append("X_ERROR", z_anc, p_meas)
-    #             circuit.append("M", z_anc)
-
-    #             for ai in range(len(z_chks)):
-    #                 rec_cur = stim.target_rec(-(len(z_chks) - ai))
-    #                 if t == 0:
-    #                     circuit.append("DETECTOR", [rec_cur], [ai, 1, t])
-    #                 else:
-    #                     rec_prev = stim.target_rec(
-    #                         -(len(z_chks) - ai) - len(z_chks))
-    #                     circuit.append("DETECTOR",
-    #                                    [rec_cur, rec_prev], [ai, 1, t])
-
-    #     if last_round:
-    #         data_indices = list(range(n_data))
-    #         circuit.append("M", data_indices)
-    #         for li, support in enumerate(self.z_logicals()):
-    #             indices = sorted(reg[q] for q in support)
-    #             targets = [stim.target_rec(-(n_data - i)) for i in indices]
-    #             circuit.append("OBSERVABLE_INCLUDE", targets, li)
-
-    #     return circuit
 
 
 class EmptyPatch(CodePatch):
@@ -384,148 +283,26 @@ class SurfaceCode(CodePatch):
 # Rotated Surface Code
 # ---------------------------------------------------------------------------
 
-class RotatedSurfaceCode(CodePatch):
-    """
-    Rotated surface code distance d. (Fowler et al. 2012 convention)
-
-    Qubit index: row*d + col
-
-    Plaquette at center (r+0.5, c+0.5), r,c in 0..d-2:
-        (r+c) even  →  Z plaquette
-        (r+c) odd   →  X plaquette
-
-    Bulk plaquettes are weight-4.
-    Boundary half-plaquettes are weight-2:
-        Z-smooth boundaries (top/bottom):
-            top:    Z weight-2 at columns c where (0+c) % 2 == 1, i.e. c=1,3,...
-            bottom: Z weight-2 at columns c where (d-2+c) % 2 == 1
-        X-smooth boundaries (left/right):
-            left:   X weight-2 at rows r where (r+0) % 2 == 0, i.e. r=0,2,...
-            right:  X weight-2 at rows r where (r+d-2) % 2 == 0
-
-    Logical operators (Fowler convention):
-        L_Z: left column  (0,0)..(d-1, 0)   ← Z-rough boundary = top/bottom
-        L_X: top row      (0,0)..(0, d-1)   ← X-rough boundary = left/right
-
-    d=3 checks:
-        Z: Z_bulk_0_0={0,1,3,4}, Z_bulk_1_1={4,5,7,8}, Z_top_1={1,2}, Z_bot_0={6,7}
-        X: X_bulk_0_1={1,2,4,5}, X_bulk_1_0={3,4,6,7}, X_left_0={0,3}, X_right_1={5,8}
-        L_Z={0,3,6}  L_X={0,1,2}
-    """
-
-    def __init__(self, d: int, patch_name: str = "patch", offset=(0.0, 0.0)):
-        self.d = d
+class RotatedSurfaceCodePatch(CodePatch):
+    def __init__(self, css: CSS, patch_name: str = "rot_surf", offset=(0.0, 0.0), scale=(1,1)):
         self._name = patch_name
-        self._offset = offset
-        self._build()
+        self.d = css.d
+        self.set_css(css)
+        self.scale = scale
 
-    @property
     def name(self) -> str:
         return self._name
-
-    def _q(self, x: int, y: int) -> Qubit:
-        # x: 오른쪽으로 증가, y: 아래로 증가
-        return Qubit(self._name, y * self.d + x, (x, y))
-
-    def _build(self):
-        d = self.d
-        # x: 오른쪽, y: 아래로 증가
-        self._data_qubits = [self._q(x, y)
-                                for y in range(d) for x in range(d)]
-
-        self._x_checks: list[Check] = []
-        self._z_checks: list[Check] = []
-
-        # Bulk plaquettes: center at (x+0.5, y+0.5), x,y in 0..d-2
-        for y in range(d - 1):
-            for x in range(d - 1):
-                support = frozenset([
-                    self._q(x,   y),   self._q(x+1, y),
-                    self._q(x, y+1),   self._q(x+1, y+1),
-                ])
-                if (x + y) % 2 == 0:
-                    self._z_checks.append(Check(support, "Z", f"Z_bulk_{x}_{y}"))
-                else:
-                    self._x_checks.append(Check(support, "X", f"X_bulk_{x}_{y}"))
-
-        # Top boundary Z (y=0)
-        for x in range(d - 1):
-            if (x + 0) % 2 == 1:
-                self._z_checks.append(Check(
-                    frozenset([self._q(x, 0), self._q(x+1, 0)]),
-                    "Z", f"Z_top_{x}"))
-
-        # Bottom boundary Z (y=d-1)
-        for x in range(d - 1):
-            if (x + d - 2) % 2 == 1:
-                self._z_checks.append(Check(
-                    frozenset([self._q(x, d-1), self._q(x+1, d-1)]),
-                    "Z", f"Z_bot_{x}"))
-
-        # Left boundary X (x=0)
-        for y in range(d - 1):
-            if (0 + y) % 2 == 0:
-                self._x_checks.append(Check(
-                    frozenset([self._q(0, y), self._q(0, y+1)]),
-                    "X", f"X_left_{y}"))
-
-        # Right boundary X (x=d-1)
-        for y in range(d - 1):
-            if (d - 1 + y) % 2 == 0:
-                self._x_checks.append(Check(
-                    frozenset([self._q(d-1, y), self._q(d-1, y+1)]),
-                    "X", f"X_right_{y}"))
-
-        # Logical operators (Fowler convention)
-        # L_Z: 오른쪽 끝 x=d-1 column
-        # L_X: 맨 위 y=0 row
-        self._z_logicals = [
-            frozenset(self._q(d-1, y) for y in range(d))
-        ]
-        self._x_logicals = [
-            frozenset(self._q(x, 0) for x in range(d))
-        ]
-        for r in range(d - 1):
-            if (r + d - 2) % 2 == 0:    # bulk X plaquette at (r, c=d-2)
-                self._x_checks.append(Check(
-                    frozenset([self._q(r, d-1), self._q(r+1, d-1)]),
-                    "X", f"X_right_{r}"))
-
-        # ------------------------------------------------------------------
-        # Logical operators  (Fowler convention)
-        # L_Z: right column  — crosses Z-rough boundary (top/bottom)
-        # L_X: top row      — crosses X-rough boundary (left/right)
-        # ------------------------------------------------------------------
-        self._z_logicals = [
-            frozenset(self._q(r, d-1) for r in range(d))
-        ]
-        self._x_logicals = [
-            frozenset(self._q(0, c) for c in range(d))
-        ]
-
-    # -- CodePatch interface -------------------------------------------------
     def data_qubits(self) -> list[Qubit]: return self._data_qubits
     def x_checks(self) -> list[Check]:    return self._x_checks
     def z_checks(self) -> list[Check]:    return self._z_checks
-    def x_logicals(self):                 return self._x_logicals
-    def z_logicals(self):                 return self._z_logicals
-
-    # -- geometry ------------------------------------------------------------
-    # def qubit_coords(self) -> dict[Qubit, tuple[int, int]]:
-    #     return {self._q(r, c): (r, c)
-    #             for r in range(self.d) for c in range(self.d)}
-    def qubit_from_coord(self, x: int, y: int) -> Qubit:
-        idx = y * self.d + x
-        return self._data_qubits[idx]
-    def boundary_qubits(self, side: str) -> list[Qubit]:
-        """side: 'top', 'bottom', 'left', 'right'"""
-        d = self.d
-        return {
-            "top":    [self._q(x, 0)   for x in range(d)],
-            "bottom": [self._q(x, d-1) for x in range(d)],
-            "left":   [self._q(0, y)   for y in range(d)],
-            "right":  [self._q(d-1, y) for y in range(d)],
-        }[side]
+    def local_coord(self, q: Qubit):
+        idx = self.get_idx(q)
+        y = idx//self.d
+        x = idx%self.d
+        scale_x, scale_y = self.scale
+        return (x*scale_x, y*scale_y)
+    def local_coord_chk(self, typ:str, idx:int):
+        raise NotImplementedError
 
 
 # ---------------------------------------------------------------------------
