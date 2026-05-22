@@ -1,0 +1,15 @@
+numpy
+scipy
+matplotlib
+networkx
+sympy
+tqdm
+galois
+stim
+pymatching
+ldpc
+tqecd
+pulp
+pysat
+docplex
+cplex
