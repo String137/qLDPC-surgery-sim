@@ -4,6 +4,7 @@ from core.primitives import *
 from core.codes import *
 import numpy as np
 from surgery.circuit import *
+from surgery.surgery import MergedCodeWithGraph
 
 
 class MemoryCircuitScheduler:
@@ -72,3 +73,8 @@ class MemoryCircuitScheduler:
         )
 
         return schedule
+    
+
+class SurgeryCircuitScheduler:
+    def __init__(self, patch1: CodePatch, patch2: CodePatch, merged:MergedCodeWithGraph):
+        pass
