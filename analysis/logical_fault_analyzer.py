@@ -2,16 +2,189 @@ import numpy as np
 import pulp
 import stim
 
+NOISE_GATES = {'Z_ERROR', 'X_ERROR', 'Y_ERROR'}
+DEPOLARIZE1_PAULIS = ['X', 'Y', 'Z']
+DEPOLARIZE2_PAULIS = [
+    'IX', 'IY', 'IZ',
+    'XI', 'XX', 'XY', 'XZ',
+    'YI', 'YX', 'YY', 'YZ',
+    'ZI', 'ZX', 'ZY', 'ZZ',
+]
+
+
+class ErrorSimulator:
+    def __init__(self, circ: stim.Circuit):
+        self.circ = circ
+        self.noiseless_flat = list(circ.without_noise().flattened())
+        self.n_qubits = circ.num_qubits
+        self.fault_list = self._build_fault_list()
+        self.n_detectors = circ.detector_error_model(decompose_errors=False).num_detectors
+        self.n_faults = len(self.fault_list)
+
+        self.fault_z_errors = np.zeros((self.n_faults, self.n_qubits), dtype=int)
+        self.fault_x_errors = np.zeros((self.n_faults, self.n_qubits), dtype=int)
+        self.H_dem = np.zeros((self.n_detectors, self.n_faults), dtype=int)
+
+        for j, f in enumerate(self.fault_list):
+            effect = self.get_fault_effect(f)
+            self.H_dem[:, j] = effect['det_flips']
+            self.fault_z_errors[j] = effect['z_errors']
+            self.fault_x_errors[j] = effect['x_errors']
+
+    def _build_fault_list(self) -> list[dict]:
+        flat = list(self.circ.flattened())
+        fault_list = []
+        noiseless_idx = 0
+
+        for inst in flat:
+            if inst.name in NOISE_GATES:
+                for j, t in enumerate(inst.targets_copy()):
+                    pauli = inst.name[0]
+                    fault_list.append({
+                        'inst_idx':   noiseless_idx,
+                        'target_idx': j,
+                        'qubit':      t.value,
+                        'gate':       inst.name,
+                        'pauli':      pauli,
+                        'qubit2':     None,
+                    })
+
+            elif inst.name == 'DEPOLARIZE1':
+                for j, t in enumerate(inst.targets_copy()):
+                    for pauli in DEPOLARIZE1_PAULIS:
+                        fault_list.append({
+                            'inst_idx':   noiseless_idx,
+                            'target_idx': j,
+                            'qubit':      t.value,
+                            'gate':       'DEPOLARIZE1',
+                            'pauli':      pauli,
+                            'qubit2':     None,
+                        })
+
+            elif inst.name == 'DEPOLARIZE2':
+                targets = inst.targets_copy()
+                for j in range(0, len(targets), 2):
+                    q0 = targets[j].value
+                    q1 = targets[j + 1].value
+                    for pauli in DEPOLARIZE2_PAULIS:
+                        fault_list.append({
+                            'inst_idx':   noiseless_idx,
+                            'target_idx': j // 2,
+                            'qubit':      q0,
+                            'gate':       'DEPOLARIZE2',
+                            'pauli':      pauli,
+                            'qubit2':     q1,
+                        })
+
+            elif inst.name == 'MPP':
+                args = inst.gate_args_copy()
+                p = args[0] if args else 0.0
+                groups = str(inst).split()[1:]
+                if p > 0:
+                    for j, group in enumerate(groups):
+                        fault_list.append({
+                            'inst_idx':   noiseless_idx,
+                            'target_idx': j,
+                            'qubit':      None,
+                            'gate':       'MPP',
+                            'pauli':      None,
+                            'qubit2':     None,
+                            'mpp_group':  group,
+                        })
+                noiseless_idx += 1
+
+            else:
+                noiseless_idx += 1
+
+        return fault_list
+
+    def _build_mpp_fault_circuit(self, inst_idx: int, group_idx: int) -> stim.Circuit:
+        inst = self.noiseless_flat[inst_idx]
+        groups = str(inst).split()[1:]
+
+        new_circuit = stim.Circuit()
+        for i, orig_inst in enumerate(self.noiseless_flat):
+            if i == inst_idx:
+                for j, group in enumerate(groups):
+                    if j == group_idx:
+                        new_circuit += stim.Circuit(f"MPP(1.0) {group}")
+                    else:
+                        new_circuit += stim.Circuit(f"MPP {group}")
+            else:
+                new_circuit.append(orig_inst)
+        return new_circuit
+
+    def _build_pauli_fault_circuit(self, inst_idx: int, qubit: int, pauli: str,
+                                    qubit2: int | None = None) -> stim.Circuit:
+        new_circuit = stim.Circuit()
+        for i, inst in enumerate(self.noiseless_flat):
+            if i == inst_idx:
+                if qubit2 is None:
+                    new_circuit.append(f"{pauli}_ERROR", [qubit], [1.0])
+                else:
+                    p0, p1 = pauli[0], pauli[1]
+                    if p0 != 'I':
+                        new_circuit.append(f"{p0}_ERROR", [qubit], [1.0])
+                    if p1 != 'I':
+                        new_circuit.append(f"{p1}_ERROR", [qubit2], [1.0])
+            new_circuit.append(inst)
+        return new_circuit
+
+    def get_fault_effect(self, fault: dict) -> dict:
+        if fault['gate'] == 'MPP':
+            new_circuit = self._build_mpp_fault_circuit(fault['inst_idx'], fault['target_idx'])
+        else:
+            new_circuit = self._build_pauli_fault_circuit(
+                fault['inst_idx'],
+                fault['qubit'],
+                fault['pauli'],
+                fault['qubit2'],
+            )
+
+        sim = stim.FlipSimulator(batch_size=1, disable_stabilizer_randomization=True)
+        sim.do(new_circuit)
+        det_flips = sim.get_detector_flips(instance_index=0)
+        pauli_frame = sim.peek_pauli_flips(instance_index=0)
+
+        det_array = np.zeros(self.n_detectors, dtype=int)
+        for d in np.where(det_flips)[0]:
+            det_array[int(d)] = 1
+
+        z_errors = np.zeros(self.n_qubits, dtype=int)
+        x_errors = np.zeros(self.n_qubits, dtype=int)
+        for i, p in enumerate(pauli_frame):
+            if p in (3, 2):  # Z, Y
+                z_errors[i] = 1
+            if p in (1, 2):  # X, Y
+                x_errors[i] = 1
+
+        return {
+            'det_flips': det_array,
+            'z_errors':  z_errors,
+            'x_errors':  x_errors,
+        }
+
+    def inject_fault(self, fault: dict) -> dict:
+        return self.get_fault_effect(fault)
+
+    def get_dem(self):
+        return self.H_dem
+
+    def explain_fault(self, fault: dict) -> None:
+        f = fault
+        inst = self.noiseless_flat[f['inst_idx']]
+        print(f"fault: gate={f['gate']}, inst_idx={f['inst_idx']}, qubit={f['qubit']}, pauli={f['pauli']}")
+        print(f"  -> instruction at inst_idx={f['inst_idx']}: {inst}")
+        if f['gate'] == 'MPP':
+            print(f"  -> MPP group: {f['mpp_group']}")
+        elif f.get('qubit2') is not None:
+            print(f"  -> qubits: ({f['qubit']}, {f['qubit2']})")
+
 
 class LogicalFaultAnalyzer:
-    def __init__(self, circuit: stim.Circuit, patch):
-        """
-        Parameters
-        ----------
-        circuit : stim.Circuit
-        patch   : CodePatch instance (css 속성 필요)
-        """
-        self.circuit = circuit
+    def __init__(self, error_sim: ErrorSimulator, patch):
+        self.error_sim = error_sim
+        self.circuit = error_sim.circ
         self.patch = patch
 
         css = patch.css
@@ -20,39 +193,19 @@ class LogicalFaultAnalyzer:
         self.L_X = [np.array(l, dtype=int) for l in css.logical_x_repr]
         self.L_Z = [np.array(l, dtype=int) for l in css.logical_z_repr]
 
-        dem = circuit.detector_error_model(decompose_errors=False)
-        self.faults = [inst for inst in dem.flattened() if inst.type == "error"]
-        self.n_faults = len(self.faults)
-        self.n_qubits = circuit.num_qubits
-        self.n_detectors = dem.num_detectors
-
-        self.H_dem = np.zeros((self.n_detectors, self.n_faults), dtype=int)
-        for j, inst in enumerate(self.faults):
-            for t in inst.targets_copy():
-                if t.is_relative_detector_id():
-                    self.H_dem[t.val, j] = 1
+        self.fault_list = error_sim.fault_list
+        self.n_faults = error_sim.n_faults
+        self.n_qubits = error_sim.n_qubits
+        self.n_detectors = error_sim.n_detectors
+        self.H_dem = error_sim.H_dem
 
         self.fault_z_map, self.fault_x_map = self._build_fault_maps()
 
     def _build_fault_maps(self):
         fault_z_map, fault_x_map = {}, {}
-        for i, inst in enumerate(self.faults):
-            targets_str = " ".join(str(t) for t in inst.targets_copy())
-            explained = self.circuit.explain_detector_error_model_errors(
-                dem_filter=stim.DetectorErrorModel(f"error(1) {targets_str}"),
-                reduce_to_one_representative_error=False
-            )
-            z_qubits, x_qubits = [], []
-            for e in explained:
-                for loc in e.circuit_error_locations:
-                    for target in loc.flipped_pauli_product:
-                        gt = target.gate_target
-                        if gt.is_z_target or gt.is_y_target:
-                            z_qubits.append(gt.value)
-                        if gt.is_x_target or gt.is_y_target:
-                            x_qubits.append(gt.value)
-            fault_z_map[i] = z_qubits
-            fault_x_map[i] = x_qubits
+        for i in range(self.n_faults):
+            fault_z_map[i] = list(np.where(self.error_sim.fault_z_errors[i])[0])
+            fault_x_map[i] = list(np.where(self.error_sim.fault_x_errors[i])[0])
         return fault_z_map, fault_x_map
 
     def _get_config(self, error_type: str):
@@ -101,10 +254,6 @@ class LogicalFaultAnalyzer:
         return np.array([int(round(pulp.value(e[i]))) for i in range(self.n_faults)])
 
     def fault_to_r(self, e_vec: np.ndarray, error_type: str = 'Z') -> np.ndarray:
-        """
-        fault vector e -> data qubit error vector r (mod 2).
-        error_type='Z': Z error, error_type='X': X error
-        """
         fault_map, _, _ = self._get_config(error_type)
         r = np.zeros(self.n_qubits, dtype=int)
         for i, ei in enumerate(e_vec):
@@ -117,13 +266,8 @@ class LogicalFaultAnalyzer:
         self,
         e_vec: np.ndarray,
         error_type: str = 'Z',
-        observable_indices = None,
+        observable_indices=None,
     ) -> bool:
-        """
-        e_vec이 undetectable하고, minimum weight decoder 후
-        observable_indices 중 하나라도 logical error를 발생시키는지 확인.
-        observable_indices=None이면 모든 observable 확인.
-        """
         fault_map, H, L_list = self._get_config(error_type)
         if observable_indices is None:
             observable_indices = list(range(len(L_list)))
@@ -138,21 +282,10 @@ class LogicalFaultAnalyzer:
         return any(int(L_list[i] @ final % 2) for i in observable_indices)
 
     def explain(self, e_vec: np.ndarray) -> None:
-        """
-        e_vec의 active fault들을 circuit error location으로 설명 출력.
-        """
         for i, ei in enumerate(e_vec):
             if ei == 1:
-                inst = self.faults[i]
-                targets_str = " ".join(str(t) for t in inst.targets_copy())
-                explained = self.circuit.explain_detector_error_model_errors(
-                    dem_filter=stim.DetectorErrorModel(f"error(1) {targets_str}"),
-                    reduce_to_one_representative_error=False
-                )
-                print(f"fault {i}: {inst}")
-                for e in explained:
-                    for loc in e.circuit_error_locations:
-                        print(f"  -> {loc}")
+                f = self.fault_list[i]
+                self.error_sim.explain_fault(f)
                 print()
 
     def find_min_weight(
@@ -163,12 +296,6 @@ class LogicalFaultAnalyzer:
         max_iter: int = 10000,
         verbose: bool = True,
     ) -> np.ndarray:
-        """
-        Benders decomposition으로 min weight undetectable logical fault e를 찾는다.
-        weight=None이면 자동 탐색, int이면 해당 weight만 탐색.
-        observable_indices 중 하나라도 logical error가 나면 반환.
-        logical error가 없으면 None 반환.
-        """
         fault_map, H, L_list = self._get_config(error_type)
         if observable_indices is None:
             observable_indices = list(range(len(L_list)))
@@ -199,32 +326,18 @@ class LogicalFaultAnalyzer:
         if verbose:
             print("Max iterations reached.")
         return None
-    
+
     def find_faults_by_qubit(self, qubit_idx: int, error_type: str = 'Z') -> list[dict]:
-        """
-        특정 qubit에 error를 발생시키는 fault 목록 반환.
-        각 fault는 {fault_idx, tick, instruction, pauli, coord} 정보 포함.
-        """
         fault_map = self.fault_z_map if error_type == 'Z' else self.fault_x_map
         results = []
         for i, qubits in fault_map.items():
             if qubit_idx in qubits:
-                inst = self.faults[i]
-                targets_str = " ".join(str(t) for t in inst.targets_copy())
-                explained = self.circuit.explain_detector_error_model_errors(
-                    dem_filter=stim.DetectorErrorModel(f"error(1) {targets_str}"),
-                    reduce_to_one_representative_error=False
-                )
-                for e in explained:
-                    for loc in e.circuit_error_locations:
-                        for target in loc.flipped_pauli_product:
-                            gt = target.gate_target
-                            if gt.value == qubit_idx:
-                                results.append({
-                                    'fault_idx': i,
-                                    'tick': loc.tick_offset,
-                                    'instruction': loc.instruction_targets,
-                                    'pauli': str(gt),
-                                    'coord': target.coords,
-                                })
+                f = self.fault_list[i]
+                inst = self.error_sim.noiseless_flat[f['inst_idx']]
+                results.append({
+                    'fault_idx': i,
+                    'fault': f,
+                    'inst_idx': f['inst_idx'],
+                    'instruction': inst,
+                })
         return results
