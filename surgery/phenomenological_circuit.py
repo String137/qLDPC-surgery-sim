@@ -15,14 +15,10 @@ class MemoryCircuitScheduler:
         self.p_meas = p_meas
 
     def build(self) -> CircuitSchedule:
-        # tick 0: RX (|+> 초기화)
-        # tick 1: DEPOLARIZE1 + MPP X checks only, noisy, label="round_0", DETECTOR 없음
-        # tick 2 ~ rounds: DEPOLARIZE1 + MPP X+Z checks, noisy, label="round_k"
-        # 마지막 round: noiseless MPP X checks only, label="final"
-        # MX data qubits
         data_qubits = self.patch.data_qubits()
         x_checks = self.patch.x_checks()
         z_checks = self.patch.z_checks()
+        all_checks = x_checks + z_checks
 
         schedule = CircuitSchedule(set(data_qubits))
         tick = 0
@@ -33,20 +29,14 @@ class MemoryCircuitScheduler:
         )
         tick += 1
 
-        # tick 1: MPP X checks only (noisy, label="round_0")
-        # schedule.instructions[tick].append(
-        #     Instruction(tick, "DEPOLARIZE1", data_qubits, gate_args=[self.p_data])
-        # )
+        # tick 1: noiseless reference measurement (round_0)
         schedule.instructions[tick].append(
-            Instruction(tick, "MPP", x_checks, gate_args=[0], label="round_0")
-        )
-        schedule.instructions[tick].append(
-            Instruction(tick, "MPP", z_checks, gate_args=[0], label="round_0")
+            Instruction(tick, "MPP", all_checks, gate_args=[0], label="round_0")
         )
         tick += 1
 
-        # tick 2 ~ rounds: DEPOLARIZE1 + MPP X+Z checks (noisy)
-        for r in range(1, self.rounds+1):
+        # tick 2 ~ rounds: noisy MPP X+Z checks
+        for r in range(1, self.rounds + 1):
             schedule.instructions[tick].append(
                 Instruction(tick, "Z_ERROR", data_qubits, gate_args=[self.p_data])
             )
@@ -54,29 +44,28 @@ class MemoryCircuitScheduler:
                 Instruction(tick, "X_ERROR", data_qubits, gate_args=[self.p_data])
             )
             schedule.instructions[tick].append(
-                Instruction(tick, "MPP", x_checks + z_checks, gate_args=[self.p_meas], label=f"round_{r}")
+                Instruction(tick, "MPP", all_checks, gate_args=[self.p_meas], label=f"round_{r}")
             )
             tick += 1
 
-        # 마지막 round: data Z error + noiseless MPP X checks only + MX data qubits
+        # 마지막: data error + MX data qubits
         schedule.instructions[tick].append(
             Instruction(tick, "Z_ERROR", data_qubits, gate_args=[self.p_data])
         )
         schedule.instructions[tick].append(
             Instruction(tick, "X_ERROR", data_qubits, gate_args=[self.p_data])
         )
-        # schedule.instructions[tick].append(
-        #     Instruction(tick, "MPP", x_checks, gate_args=[0], label="final")
-        # )
         schedule.instructions[tick].append(
             Instruction(tick, "MX", data_qubits, gate_args=[0], label="final_data")
         )
 
+        # extra_detectors 없음 — add_detectors가 자동으로 연속 check 비교 detector 추가
+
+        schedule.qubit_coords = {q: self.patch.local_coord(q) for q in data_qubits}
         return schedule
-    
+
 
 class SurgeryCircuitScheduler:
-    
     """
     XX logical measurement via ancillary graph surgery.
 
@@ -129,23 +118,108 @@ class SurgeryCircuitScheduler:
           에러가 없으면 위 관계가 항상 성립하므로 detector로 사용 가능.
     """
 
-    def __init__(self, merged: MergedCodeWithGraph, pre_round: int, merge_round: int, post_round: int):
-        # pre_round, merge_round, post_round
-        # merge 전, merge 도중, merge 후의 EC round 반복 횟수
+    def __init__(self, merged: MergedCodeWithGraph, pre_round: int, merge_round: int, post_round: int, p_data: float, p_meas: float):
+        self.merged = merged
         self.C1 = merged.C1
         self.C2 = merged.C2
-        data_qubits = self.merged.data_qubits()
-        print("data_qubits: ")
-        print(data_qubits)
-        print("port_function:")
-        print(merged.port_func)
-        schedule = CircuitSchedule(set(data_qubits))
+        self.p_data = p_data
+        self.p_meas = p_meas
+        self.pre_round = pre_round
+        self.merge_round = merge_round
+        self.post_round = post_round
+
+    def build(self) -> CircuitSchedule:
+        c_data_qubits = self.merged.direct_sum.data_qubits()
+        a_data_qubits = self.merged.anc_graph.data_qubits()
+        all_qubits = self.merged.data_qubits()
+
+        c1_x_checks = self.C1.x_checks()
+        c1_z_checks = self.C1.z_checks()
+        c2_x_checks = self.C2.x_checks()
+        c2_z_checks = self.C2.z_checks()
+        anc_z_checks = self.merged.anc_graph.z_checks()
+
+        merged_x_checks = self.merged.x_checks()
+        merged_z_checks = self.merged.z_checks()
+
+        schedule = CircuitSchedule(set(all_qubits))
         tick = 0
 
-        # tick 0: RX (|+> 초기화)
+        # tick 0: 초기화
         schedule.instructions[tick].append(
-            Instruction(tick, "RX", data_qubits)
+            Instruction(tick, "RX", c_data_qubits)
+        )
+        schedule.instructions[tick].append(
+            Instruction(tick, "R", a_data_qubits)
         )
         tick += 1
 
-        pass
+        # tick 1: noiseless reference measurement
+        schedule.instructions[tick].append(
+            Instruction(tick, "MPP",
+                c1_x_checks + c2_x_checks + c1_z_checks + c2_z_checks + anc_z_checks,
+                gate_args=[0], label="ref")
+        )
+        tick += 1
+
+        # pre-rounds
+        for r in range(self.pre_round):
+            schedule.instructions[tick].append(
+                Instruction(tick, "Z_ERROR", c_data_qubits, gate_args=[self.p_data])
+            )
+            schedule.instructions[tick].append(
+                Instruction(tick, "X_ERROR", c_data_qubits, gate_args=[self.p_data])
+            )
+            schedule.instructions[tick].append(
+                Instruction(tick, "MPP",
+                    c1_x_checks + c2_x_checks + c1_z_checks + c2_z_checks,
+                    gate_args=[self.p_meas], label=f"pre_{r}")
+            )
+            tick += 1
+
+        # merge-rounds
+        for r in range(self.merge_round):
+            schedule.instructions[tick].append(
+                Instruction(tick, "Z_ERROR", all_qubits, gate_args=[self.p_data])
+            )
+            schedule.instructions[tick].append(
+                Instruction(tick, "X_ERROR", all_qubits, gate_args=[self.p_data])
+            )
+            schedule.instructions[tick].append(
+                Instruction(tick, "MPP",
+                    merged_x_checks + merged_z_checks,
+                    gate_args=[self.p_meas], label=f"merge_{r}")
+            )
+            tick += 1
+
+        # split
+        schedule.instructions[tick].append(
+            Instruction(tick, "M", a_data_qubits, gate_args=[0], label="split")
+        )
+        tick += 1
+
+        # post-rounds
+        for r in range(self.post_round):
+            schedule.instructions[tick].append(
+                Instruction(tick, "Z_ERROR", c_data_qubits, gate_args=[self.p_data])
+            )
+            schedule.instructions[tick].append(
+                Instruction(tick, "X_ERROR", c_data_qubits, gate_args=[self.p_data])
+            )
+            schedule.instructions[tick].append(
+                Instruction(tick, "MPP",
+                    c1_x_checks + c2_x_checks + c1_z_checks + c2_z_checks,
+                    gate_args=[self.p_meas], label=f"post_{r}")
+            )
+            tick += 1
+
+        # 마지막: noiseless MX data qubits
+        schedule.instructions[tick].append(
+            Instruction(tick, "MX", c_data_qubits, gate_args=[0], label="final_data")
+        )
+
+        schedule.qubit_coords = {q: self.merged.local_coord(q) for q in all_qubits}
+
+
+        
+        return schedule

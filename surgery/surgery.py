@@ -169,6 +169,8 @@ class ConePatch(CodePatch):
         self.C1 = C1
         self.C2 = C2
         self.A  = A
+        self._f0 = f0
+        self._f1t = f1t
 
         direct_sum = DirectSum(C1, C2)
         c_qubits = direct_sum.data_qubits()

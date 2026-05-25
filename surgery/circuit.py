@@ -22,7 +22,8 @@ class CircuitSchedule:
     def __init__(self, qubits: set, instructions: dict[int, list[Instruction]] = None):
         self.qubits = qubits  # 회로에 등장하는 모든 qubit
         self.instructions: dict[int, list[Instruction]] = instructions if instructions is not None else defaultdict(list)  # tick -> instruction 목록
-
+        self.qubit_coords: dict = {}  # qubit -> (x, y)
+        self.extra_detectors: list[list[tuple[int, Check]]] = []
 
 class CircuitBuilder:
     """
@@ -40,6 +41,11 @@ class CircuitBuilder:
         return self._circuit.copy()
 
     def build(self):
+        if self._schedule.qubit_coords:
+            for q, (x, y) in self._schedule.qubit_coords.items():
+                idx = self._qubit_idx[q]
+                self._circuit.append("QUBIT_COORDS", [idx], [x, y])
+
         for tick in sorted(self._schedule.instructions.keys()):
             for instr in self._schedule.instructions[tick]:
                 self._append_instruction(instr)
@@ -110,6 +116,8 @@ class CircuitBuilder:
         return res
 
     def add_detectors(self):
+        # 같은 check 객체가 연속으로 측정된 경우 자동으로 detector 추가
+        # (pre-pre, merge-merge, post-post 연속 round 비교)
         check_to_meas = defaultdict(list)
         for idx, entry in self.meas_record.items():
             if entry['check'] is not None:
@@ -126,6 +134,15 @@ class CircuitBuilder:
                 ]
                 self._circuit.append('DETECTOR', recs)
 
+        # 자동으로 못 잡는 경계 부분 detector (schedule.extra_detectors에 저장된 것들)
+        for detector in self._schedule.extra_detectors:
+            recs = []
+            for tick, check in detector:
+                idxs = self.get_meas_idx(tick=tick, check=check)
+                recs += [stim.target_rec(idx - len(self.meas_record)) for idx in idxs]
+            self._circuit.append('DETECTOR', recs)
+
+            
     def add_observables(self, supports: list[list[Qubit]]):
         final_data_idxs = self.get_meas_idx(label='final_data')
         qubit_to_final_idx = {self.meas_record[idx]['qubits'][0]: idx for idx in final_data_idxs}
