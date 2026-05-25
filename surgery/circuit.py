@@ -23,7 +23,7 @@ class CircuitSchedule:
         self.qubits = qubits  # 회로에 등장하는 모든 qubit
         self.instructions: dict[int, list[Instruction]] = instructions if instructions is not None else defaultdict(list)  # tick -> instruction 목록
         self.qubit_coords: dict = {}  # qubit -> (x, y)
-        self.extra_detectors: list[list[tuple[int, Check]]] = []
+        self.extra_detectors: list[list[tuple[int, Qubit|Check]]] = []
 
 class CircuitBuilder:
     """
@@ -117,7 +117,7 @@ class CircuitBuilder:
 
     def add_detectors(self):
         # 같은 check 객체가 연속으로 측정된 경우 자동으로 detector 추가
-        # (pre-pre, merge-merge, post-post 연속 round 비교)
+        
         check_to_meas = defaultdict(list)
         for idx, entry in self.meas_record.items():
             if entry['check'] is not None:
@@ -125,9 +125,13 @@ class CircuitBuilder:
 
         for check, meas_list in check_to_meas.items():
             meas_list.sort()
+
+                
             for i in range(1, len(meas_list)):
-                _, cur_idx = meas_list[i]
-                _, prev_idx = meas_list[i-1]
+                tick_cur, cur_idx = meas_list[i]
+                tick_prev, prev_idx = meas_list[i-1]
+                if tick_cur - tick_prev != 1:
+                    continue
                 recs = [
                     stim.target_rec(cur_idx - len(self.meas_record)),
                     stim.target_rec(prev_idx - len(self.meas_record)),
@@ -137,8 +141,11 @@ class CircuitBuilder:
         # 자동으로 못 잡는 경계 부분 detector (schedule.extra_detectors에 저장된 것들)
         for detector in self._schedule.extra_detectors:
             recs = []
-            for tick, check in detector:
-                idxs = self.get_meas_idx(tick=tick, check=check)
+            for tick, target in detector:
+                if isinstance(target, Check):
+                    idxs = self.get_meas_idx(tick=tick, check=target)
+                else:  # Qubit
+                    idxs = self.get_meas_idx(tick=tick, qubit=target)
                 recs += [stim.target_rec(idx - len(self.meas_record)) for idx in idxs]
             self._circuit.append('DETECTOR', recs)
 
@@ -153,3 +160,15 @@ class CircuitBuilder:
                 for q in support
             ]
             self._circuit.append('OBSERVABLE_INCLUDE', obs_recs, obs_idx)
+    
+    def explain_detectors(self):
+        total = len(self.meas_record)
+        for inst in self._circuit:
+            if inst.name != 'DETECTOR':
+                continue
+            parts = []
+            for t in inst.targets_copy():
+                idx = total + t.value
+                entry = self.meas_record[idx]
+                parts.append(f"tick={entry['tick']} label={entry['label']} check={entry['check']}")
+            print("DETECTOR: " + " | ".join(parts))

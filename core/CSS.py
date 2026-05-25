@@ -175,7 +175,7 @@ class CSS:
 
     def _set_missing_logical(self, typ:str, idx:int):
         # dual logical operator가 None이라면 dual check와 commute하고 primal check의 span에 안들어가는 것 찾음.
-        print(f"set logical {typ} {idx}")
+        # print(f"set logical {typ} {idx}")
         if typ == "X":
             G_opp = self.Gz
             G_self = self.Gx
@@ -202,8 +202,8 @@ class CSS:
         
         # Ax=b 의 nullspace의 basis중에 G_self의 row space에 없는 것 찾기 (반드시 존재함)
         x_part, x_null = solve_gf2(A, b)
-        print("x_part: ", x_part)
-        print("x_null: ", x_null)
+        # print("x_part: ", x_part)
+        # print("x_null: ", x_null)
         # x_part는 row vector
         # x_null의 행이 해
         for row in x_null:

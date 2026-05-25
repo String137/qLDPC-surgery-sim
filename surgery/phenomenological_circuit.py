@@ -92,17 +92,40 @@ class SurgeryCircuitScheduler:
             그 product가 XX logical measurement 결과가 됨.
 
     Detector 설정:
-        - 일반적으로: 이전 round의 같은 check meas결과와 비교하는 detector 추가
-        - Ancillary graph의 X check (A_v)는 merge 첫 round에 detector 없음.
-          두 번째 round부터 이전 round와 비교하는 detector 추가.
-        - Ancillary graph의 Z check (B_p)는 merge 첫 round에
-          noiseless reference와 비교하는 detector 추가.
-          이후 round부터 이전 round와 비교하는 detector 추가.
-        - C1, C2의 Z check는 merge 시작 round부터 ancilla qubit (edge)을 포함한
-          merged Z check로 측정됨. ancilla qubit이 |0>이므로 meas결과는
-          이전 round (pre-round 마지막)와 같아야 함.
-          따라서 merge 시작 round의 해당 Z check meas결과와
-          직전 round의 같은 Z check meas결과를 비교하는 detector를 추가해야 함.
+        # 자동으로 잡히는 것들 (add_detectors):
+        # - pre rounds 내부: C1, C2 X/Z check 연속 비교 → 같은 객체라서 자동
+        # - merge rounds 내부:
+        #   - C1, C2 X check: deform 안 되므로 같은 객체 → 자동
+        #   - ancilla X check (A_v): merge 첫 round는 detector 없음 (의도),
+        #     merge_1부터 연속 비교 → 자동
+        #   - deformed Z check: 같은 객체 연속 → 자동
+        #   - ancilla Z check (B_p): 같은 객체 연속 → 자동 (ref → merge_0 포함)
+        # - post rounds 내부: C1, C2 X/Z check 연속 비교 → 자동
+        # - pre → merge X check: C1, C2 X check deform 안 되므로 같은 객체 → 자동
+        # - merge → post X check: C1, C2 X check 같은 객체 → 자동
+
+        # extra_detectors에 추가해야 하는 것들:
+        # 경계는 두 군데: pre→merge, merge→post(split)
+        #
+        # [pre → merge 경계]
+        # - C1, C2 Z check: merge에서 ancilla qubit이 추가된 deformed Z check로 바뀜
+        #                   → 다른 객체라 자동 감지 불가
+        #                   → extra: (pre 마지막 tick, C1/C2 Z check)
+        #                            (merge 첫 tick, deformed Z check) 쌍으로 detector 추가
+        # - ancilla Z check (B_p): pre round에서 reference용도로 noiseless 측정함
+        #                           → ref → merge_0 자동으로 잡힘
+        # - ancilla X check (A_v): merge 첫 round는 detector 없음 (의도된 것,
+        #                           첫 측정값이 XX measurement outcome의 일부)
+        #
+        # [merge → post 경계 (split)]
+        # - C1, C2 Z check: deformed Z check에서 원래 Z check로 돌아옴
+        #                   → 다른 객체라 자동 감지 불가
+        #                   → split detector:
+        #                     (마지막 merge tick, deformed Z check)
+        #                     XOR (split tick, ancilla qubit MZ)  ← Qubit으로 저장
+        #                     XOR (post 첫 tick, C1/C2 Z check) == 0
+        # - ancilla Z check (B_p): post round에서 측정 안 함 → detector 불필요
+        # - ancilla X check (A_v): post round에서 측정 안 함 → detector 불필요
 
     Split (ancilla 측정):
         - Ancillary graph qubit을 MZ로 측정 (|0> init과 같은 basis)
@@ -137,15 +160,22 @@ class SurgeryCircuitScheduler:
         c1_z_checks = self.C1.z_checks()
         c2_x_checks = self.C2.x_checks()
         c2_z_checks = self.C2.z_checks()
-        anc_z_checks = self.merged.anc_graph.z_checks()
+        anc_z_checks = self.merged.anc_graph.z_checks()  # B_p
 
-        merged_x_checks = self.merged.x_checks()
-        merged_z_checks = self.merged.z_checks()
+        merged_x_checks = self.merged.x_checks()  # C1, C2 X check + A_v
+        merged_z_checks = self.merged.z_checks()  # deformed Z check + B_p
+
+
+        # c_z_checks: C1, C2 Z check (direct_sum 순서와 동일)
+        # merged_z_checks[i]가 c_z_checks[i]의 deformed 버전
+        c_z_checks = c1_z_checks + c2_z_checks
 
         schedule = CircuitSchedule(set(all_qubits))
         tick = 0
 
         # tick 0: 초기화
+        # C1, C2 data qubit: RX (|+>)
+        # ancilla qubit: R (|0>)
         schedule.instructions[tick].append(
             Instruction(tick, "RX", c_data_qubits)
         )
@@ -155,14 +185,16 @@ class SurgeryCircuitScheduler:
         tick += 1
 
         # tick 1: noiseless reference measurement
+        # C1, C2의 X, Z check + ancilla Z check (B_p)
+        # ancilla X check (A_v)는 reference 없음 (첫 측정값이 XX measurement outcome)
         schedule.instructions[tick].append(
             Instruction(tick, "MPP",
-                c1_x_checks + c2_x_checks + c1_z_checks + c2_z_checks + anc_z_checks,
+                c1_x_checks + c2_x_checks + c1_z_checks + c2_z_checks,
                 gate_args=[0], label="ref")
         )
         tick += 1
 
-        # pre-rounds
+        # pre-rounds: C1, C2 각자 EC
         for r in range(self.pre_round):
             schedule.instructions[tick].append(
                 Instruction(tick, "Z_ERROR", c_data_qubits, gate_args=[self.p_data])
@@ -175,9 +207,16 @@ class SurgeryCircuitScheduler:
                     c1_x_checks + c2_x_checks + c1_z_checks + c2_z_checks,
                     gate_args=[self.p_meas], label=f"pre_{r}")
             )
+            
             tick += 1
+        # merge 직전 tick에서 reference로 anc_z_check 측정
+        schedule.instructions[tick-1].append(
+            Instruction(tick-1, "MPP",
+            anc_z_checks,
+            gate_args=[0], label="ref")
+        )
 
-        # merge-rounds
+        # merge-rounds: merged code EC
         for r in range(self.merge_round):
             schedule.instructions[tick].append(
                 Instruction(tick, "Z_ERROR", all_qubits, gate_args=[self.p_data])
@@ -192,13 +231,14 @@ class SurgeryCircuitScheduler:
             )
             tick += 1
 
-        # split
+        # split: ancilla qubit MZ 측정 (|0> init과 같은 basis)
         schedule.instructions[tick].append(
             Instruction(tick, "M", a_data_qubits, gate_args=[0], label="split")
         )
-        tick += 1
+        # tick += 1 
+        # split -> post 넘어갈 때는 tick 안넘어가야함.
 
-        # post-rounds
+        # post-rounds: C1, C2 각자 EC
         for r in range(self.post_round):
             schedule.instructions[tick].append(
                 Instruction(tick, "Z_ERROR", c_data_qubits, gate_args=[self.p_data])
@@ -218,8 +258,37 @@ class SurgeryCircuitScheduler:
             Instruction(tick, "MX", c_data_qubits, gate_args=[0], label="final_data")
         )
 
+        # tick 계산
+        pre_last_tick = 1 + self.pre_round
+        merge_first_tick = 1 + self.pre_round + 1
+        merge_last_tick = 1 + self.pre_round + self.merge_round
+        split_tick = 1 + self.pre_round + self.merge_round + 1
+        post_first_tick = 1 + self.pre_round + self.merge_round + 2
+
+        # extra_detectors 1: pre → merge Z check 경계
+        # f0[i].weight() > 0인 경우만 deformed된 Z check
+        for i, f0_check in enumerate(self.merged._f0):
+            if f0_check.weight() > 0:
+                original_z = c_z_checks[i]
+                deformed_z = merged_z_checks[i]
+                schedule.extra_detectors.append([
+                    (pre_last_tick, original_z),
+                    (merge_first_tick, deformed_z),
+                ])
+
+        # extra_detectors 2: split detector (merge → post Z check 경계)
+        # deformed Z check XOR ancilla qubit MZ XOR post 첫 round Z check == 0
+        for i, f0_check in enumerate(self.merged._f0):
+            if f0_check.weight() > 0:
+                deformed_z = merged_z_checks[i]
+                original_z = c_z_checks[i]
+                detector = [
+                    (merge_last_tick, deformed_z),
+                    (post_first_tick, original_z),
+                ]
+                for q in f0_check.qubits:
+                    detector.append((split_tick, q))  # Qubit으로 저장
+                schedule.extra_detectors.append(detector)
+
         schedule.qubit_coords = {q: self.merged.local_coord(q) for q in all_qubits}
-
-
-        
         return schedule

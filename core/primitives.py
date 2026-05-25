@@ -62,10 +62,10 @@ class Check:
     def __add__(self, other: Check) -> Check:
         """두 check의 합 (mod 2)."""
         if self.pauli != other.pauli:
-            if self.pauli == "Empty" and other.pauli != "Empty":
-                pauli = other.pauli
-            elif self.pauli != "Empty" and other.pauli == "Empty":
-                pauli = self.pauli
+            if other.pauli == "Empty" or other.weight() == 0:
+                return self
+            if self.pauli == "Empty" or self.weight() == 0:
+                return other
             else:
                 # CSS code가 아닌 경우를 지원하려면 Check 클래스 구조를 바꿔야함.
                 raise NotImplementedError("Cannot add checks of different Pauli types.")
