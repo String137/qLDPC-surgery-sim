@@ -155,6 +155,7 @@ class SurgeryCircuitScheduler:
         c_data_qubits = self.merged.direct_sum.data_qubits()
         a_data_qubits = self.merged.anc_graph.data_qubits()
         all_qubits = self.merged.data_qubits()
+        
 
         c1_x_checks = self.C1.x_checks()
         c1_z_checks = self.C1.z_checks()

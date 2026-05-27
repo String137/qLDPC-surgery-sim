@@ -33,7 +33,8 @@ class CircuitBuilder:
     def __init__(self, schedule: CircuitSchedule):
         self.meas_record = {}  # global_meas_idx -> {tick, gate, qubits, label, check}
         self._circuit = stim.Circuit()
-        self._qubit_idx = {q: i for i, q in enumerate(sorted(schedule.qubits))}
+        self._qubit_idx = {q: q.idx for q in (schedule.qubits)} # 이거 이상함. 알파벳 순서임.
+        # merged code에서의 global(local) idx가 필요. merged code를 넘겨줘야하나..? 
         self._schedule = schedule
 
     @property
@@ -44,6 +45,7 @@ class CircuitBuilder:
         if self._schedule.qubit_coords:
             for q, (x, y) in self._schedule.qubit_coords.items():
                 idx = self._qubit_idx[q]
+                print(q,idx)
                 self._circuit.append("QUBIT_COORDS", [idx], [x, y])
 
         for tick in sorted(self._schedule.instructions.keys()):
