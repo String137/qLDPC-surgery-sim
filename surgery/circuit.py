@@ -21,6 +21,7 @@ class Instruction:
 class CircuitSchedule:
     def __init__(self, qubits: set, instructions: dict[int, list[Instruction]] = None):
         self.qubits = qubits  # 회로에 등장하는 모든 qubit
+        self.qubit_idxs: dict[Qubit, int] = None
         self.instructions: dict[int, list[Instruction]] = instructions if instructions is not None else defaultdict(list)  # tick -> instruction 목록
         self.qubit_coords: dict = {}  # qubit -> (x, y)
         self.extra_detectors: list[list[tuple[int, Qubit|Check]]] = []
@@ -33,7 +34,7 @@ class CircuitBuilder:
     def __init__(self, schedule: CircuitSchedule):
         self.meas_record = {}  # global_meas_idx -> {tick, gate, qubits, label, check}
         self._circuit = stim.Circuit()
-        self._qubit_idx = {q: q.idx for q in (schedule.qubits)} # 이거 이상함. 알파벳 순서임.
+        self._qubit_idx = schedule.qubit_idxs # 이거 이상함. 알파벳 순서임.
         # merged code에서의 global(local) idx가 필요. merged code를 넘겨줘야하나..? 
         self._schedule = schedule
 
@@ -45,7 +46,7 @@ class CircuitBuilder:
         if self._schedule.qubit_coords:
             for q, (x, y) in self._schedule.qubit_coords.items():
                 idx = self._qubit_idx[q]
-                print(q,idx)
+                # print(q,idx)
                 self._circuit.append("QUBIT_COORDS", [idx], [x, y])
 
         for tick in sorted(self._schedule.instructions.keys()):
@@ -132,8 +133,10 @@ class CircuitBuilder:
             for i in range(1, len(meas_list)):
                 tick_cur, cur_idx = meas_list[i]
                 tick_prev, prev_idx = meas_list[i-1]
+                
                 if tick_cur - tick_prev != 1:
                     continue
+                # prev MPP meas가 p=0이라면 cur 단독으로 추가하는 로직 필요.
                 recs = [
                     stim.target_rec(cur_idx - len(self.meas_record)),
                     stim.target_rec(prev_idx - len(self.meas_record)),

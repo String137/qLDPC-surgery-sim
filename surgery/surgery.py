@@ -221,7 +221,7 @@ class ConePatch(CodePatch):
         lx, ly = self.patch_name_dict[q.patch_name].local_coord(q)
         ox, oy = self.patch_name_dict[q.patch_name]._offset
         return lx + ox, ly + oy
-
+    
     def get_idx(self, q: Qubit) -> int:
         return self._registry[q]
 

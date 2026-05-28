@@ -210,6 +210,7 @@ class ErrorSimulator:
         inst = self.noiseless_flat[f['inst_idx']]
         print(f"fault_idx={fault_idx}, gate={f['gate']}, qubit={f['qubit']}, pauli={f['pauli']}")
         print(f"  -> inst_idx={f['inst_idx']}: {inst}")
+        # print(f"  -> prev_inst: {self.noiseless_flat[f['inst_idx']-1]}")
         if f['gate'] == 'MPP':
             print(f"  -> mpp_group: {f['mpp_group']}")
         elif f.get('qubit2') is not None:
@@ -537,7 +538,9 @@ class SurgeryLogicalFaultAnalyzer:
 
     def is_surgery_logical_fault(self, e_vec: np.ndarray) -> bool:
         # undetectable 조건
+        
         if not np.all(self.H_dem @ e_vec % 2 == 0):
+            print("It is detectable.")
             return False
 
         # e_vec에 해당하는 fault들의 효과 합산
@@ -549,12 +552,15 @@ class SurgeryLogicalFaultAnalyzer:
                 meas_flips ^= self.error_sim.fault_meas_flips[i]
                 z_errors ^= self.error_sim.fault_z_errors[i]
                 x_errors ^= self.error_sim.fault_x_errors[i]
+        print("meas_flips: ")
+        print(np.where(meas_flips>0))
 
         # --- 조건 2: XX measurement outcome 오류 ---
         xx_outcome = 0
         for idx in self.av_merge0_meas_indices:
             xx_outcome ^= meas_flips[idx]
         if xx_outcome == 1:
+            print("XX measurement result is wrong.")
             return True
 
         # --- 조건 1: code block logical error ---

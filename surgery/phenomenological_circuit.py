@@ -16,11 +16,13 @@ class MemoryCircuitScheduler:
 
     def build(self) -> CircuitSchedule:
         data_qubits = self.patch.data_qubits()
+        
         x_checks = self.patch.x_checks()
         z_checks = self.patch.z_checks()
         all_checks = x_checks + z_checks
 
         schedule = CircuitSchedule(set(data_qubits))
+        schedule.qubit_idxs = {q: self.patch.get_idx(q) for q in data_qubits}
         tick = 0
 
         # tick 0: RX (|+> 초기화)
@@ -155,7 +157,7 @@ class SurgeryCircuitScheduler:
         c_data_qubits = self.merged.direct_sum.data_qubits()
         a_data_qubits = self.merged.anc_graph.data_qubits()
         all_qubits = self.merged.data_qubits()
-        
+ 
 
         c1_x_checks = self.C1.x_checks()
         c1_z_checks = self.C1.z_checks()
@@ -172,6 +174,7 @@ class SurgeryCircuitScheduler:
         c_z_checks = c1_z_checks + c2_z_checks
 
         schedule = CircuitSchedule(set(all_qubits))
+        schedule.qubit_idxs = {q: self.merged.get_idx(q) for q in all_qubits}
         tick = 0
 
         # tick 0: 초기화
@@ -276,6 +279,10 @@ class SurgeryCircuitScheduler:
                     (pre_last_tick, original_z),
                     (merge_first_tick, deformed_z),
                 ])
+                # print([
+                #     (pre_last_tick, original_z),
+                #     (merge_first_tick, deformed_z),
+                # ])
 
         # extra_detectors 2: split detector (merge → post Z check 경계)
         # deformed Z check XOR ancilla qubit MZ XOR post 첫 round Z check == 0

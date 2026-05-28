@@ -113,6 +113,9 @@ class QubitRegistry:
 
     def __len__(self) -> int:
         return len(self._i2q)
+    
+    def __iter__(self):
+        return iter(self._i2q)
 
     def all_qubits(self) -> list[Qubit]:
         return list(self._i2q)
