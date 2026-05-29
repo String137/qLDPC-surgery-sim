@@ -31,6 +31,12 @@ class ErrorSimulator:
         self.noiseless_flat = list(circ.without_noise().flattened())
         self.n_qubits    = circ.num_qubits
         self.n_detectors = circ.detector_error_model(decompose_errors=False).num_detectors
+        print(circ.detector_error_model(decompose_errors=False))
+        cnt=0
+        for inst in circ.flattened():
+            if inst.name == 'DETECTOR':
+                print(f"D{cnt}", inst)
+                cnt+=1
         self.n_meas      = circ.num_measurements
 
         self.fault_list = self._build_fault_list()
@@ -42,6 +48,8 @@ class ErrorSimulator:
         self.fault_meas_flips = np.zeros((self.n_faults, self.n_meas),      dtype=int)
 
         for j, f in enumerate(self.fault_list):
+            if j!=718:
+                continue
             effect = self._calc_effect(f)
             self.H_dem[:, j]         = effect['det_flips']
             self.fault_z_errors[j]   = effect['z_errors']
@@ -126,6 +134,7 @@ class ErrorSimulator:
         return fault_list
 
     def _build_mpp_fault_circuit(self, inst_idx: int, group_idx: int) -> stim.Circuit:
+        # MPP(1.0)으로 추가 제대로 안되는듯?
         inst = self.noiseless_flat[inst_idx]
         groups = str(inst).split()[1:]
 
@@ -167,7 +176,7 @@ class ErrorSimulator:
                 fault['pauli'],
                 fault['qubit2'],
             )
-
+        print(new_circuit)
         sim = stim.FlipSimulator(batch_size=1, disable_stabilizer_randomization=True)
         sim.do(new_circuit)
         det_flips = sim.get_detector_flips(instance_index=0)

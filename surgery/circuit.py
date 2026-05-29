@@ -125,8 +125,9 @@ class CircuitBuilder:
         for idx, entry in self.meas_record.items():
             if entry['check'] is not None:
                 check_to_meas[entry['check']].append((entry['tick'], idx))
-
+        
         for check, meas_list in check_to_meas.items():
+
             meas_list.sort()
 
                 
@@ -146,6 +147,7 @@ class CircuitBuilder:
         # 자동으로 못 잡는 경계 부분 detector (schedule.extra_detectors에 저장된 것들)
         for detector in self._schedule.extra_detectors:
             recs = []
+            print("detector: ",detector)
             for tick, target in detector:
                 if isinstance(target, Check):
                     idxs = self.get_meas_idx(tick=tick, check=target)
@@ -153,6 +155,8 @@ class CircuitBuilder:
                     idxs = self.get_meas_idx(tick=tick, qubit=target)
                 recs += [stim.target_rec(idx - len(self.meas_record)) for idx in idxs]
             self._circuit.append('DETECTOR', recs)
+            print(recs)
+
 
             
     def add_observables(self, supports: list[list[Qubit]]):
