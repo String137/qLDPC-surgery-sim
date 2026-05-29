@@ -28,15 +28,8 @@ class ErrorSimulator:
     """
     def __init__(self, circ: stim.Circuit):
         self.circ = circ
-        self.noiseless_flat = list(circ.without_noise().flattened())
         self.n_qubits    = circ.num_qubits
         self.n_detectors = circ.detector_error_model(decompose_errors=False).num_detectors
-        print(circ.detector_error_model(decompose_errors=False))
-        cnt=0
-        for inst in circ.flattened():
-            if inst.name == 'DETECTOR':
-                print(f"D{cnt}", inst)
-                cnt+=1
         self.n_meas      = circ.num_measurements
 
         self.fault_list = self._build_fault_list()
@@ -48,8 +41,6 @@ class ErrorSimulator:
         self.fault_meas_flips = np.zeros((self.n_faults, self.n_meas),      dtype=int)
 
         for j, f in enumerate(self.fault_list):
-            if j!=718:
-                continue
             effect = self._calc_effect(f)
             self.H_dem[:, j]         = effect['det_flips']
             self.fault_z_errors[j]   = effect['z_errors']
@@ -59,8 +50,8 @@ class ErrorSimulator:
     def _build_fault_list(self) -> list[dict]:
         """
         fault dict 필드:
-            inst_idx   : noiseless_flat에서의 instruction index (fault 삽입 위치)
-            target_idx : instruction 내에서의 target 순서
+            noisy_idx  : circ.flattened()에서의 instruction index
+            target_idx : instruction 내에서의 target 순서 (DEPOLARIZE2는 pair index)
             qubit      : fault가 직접 발생하는 qubit (MPP는 None)
             gate       : 'Z_ERROR', 'X_ERROR', 'Y_ERROR', 'DEPOLARIZE1', 'DEPOLARIZE2', 'MPP'
             pauli      : 발생하는 Pauli ('X', 'Y', 'Z', 또는 'IX' 등 2-qubit, MPP는 None)
@@ -69,18 +60,16 @@ class ErrorSimulator:
         """
         flat = list(self.circ.flattened())
         fault_list = []
-        noiseless_idx = 0
 
-        for inst in flat:
+        for noisy_idx, inst in enumerate(flat):
             if inst.name in NOISE_GATES:
                 for j, t in enumerate(inst.targets_copy()):
-                    pauli = inst.name[0]
                     fault_list.append({
-                        'inst_idx':   noiseless_idx,
+                        'noisy_idx':  noisy_idx,
                         'target_idx': j,
                         'qubit':      t.value,
                         'gate':       inst.name,
-                        'pauli':      pauli,
+                        'pauli':      inst.name[0],
                         'qubit2':     None,
                     })
 
@@ -88,7 +77,7 @@ class ErrorSimulator:
                 for j, t in enumerate(inst.targets_copy()):
                     for pauli in DEPOLARIZE1_PAULIS:
                         fault_list.append({
-                            'inst_idx':   noiseless_idx,
+                            'noisy_idx':  noisy_idx,
                             'target_idx': j,
                             'qubit':      t.value,
                             'gate':       'DEPOLARIZE1',
@@ -103,7 +92,7 @@ class ErrorSimulator:
                     q1 = targets[j + 1].value
                     for pauli in DEPOLARIZE2_PAULIS:
                         fault_list.append({
-                            'inst_idx':   noiseless_idx,
+                            'noisy_idx':  noisy_idx,
                             'target_idx': j // 2,
                             'qubit':      q0,
                             'gate':       'DEPOLARIZE2',
@@ -114,11 +103,11 @@ class ErrorSimulator:
             elif inst.name == 'MPP':
                 args = inst.gate_args_copy()
                 p = args[0] if args else 0.0
-                groups = str(inst).split()[1:]
                 if p > 0:
+                    groups = str(inst).split()[1:]
                     for j, group in enumerate(groups):
                         fault_list.append({
-                            'inst_idx':   noiseless_idx,
+                            'noisy_idx':  noisy_idx,
                             'target_idx': j,
                             'qubit':      None,
                             'gate':       'MPP',
@@ -126,61 +115,59 @@ class ErrorSimulator:
                             'qubit2':     None,
                             'mpp_group':  group,
                         })
-                noiseless_idx += 1
-
-            else:
-                noiseless_idx += 1
 
         return fault_list
 
-    def _build_mpp_fault_circuit(self, inst_idx: int, group_idx: int) -> stim.Circuit:
-        # MPP(1.0)으로 추가 제대로 안되는듯?
-        inst = self.noiseless_flat[inst_idx]
-        groups = str(inst).split()[1:]
-
-        new_circuit = stim.Circuit()
-        for i, orig_inst in enumerate(self.noiseless_flat):
-            if i == inst_idx:
-                for j, group in enumerate(groups):
-                    if j == group_idx:
-                        new_circuit += stim.Circuit(f"MPP(1.0) {group}")
-                    else:
-                        new_circuit += stim.Circuit(f"MPP {group}")
-            else:
-                new_circuit.append(orig_inst)
-        return new_circuit
-
-    def _build_pauli_fault_circuit(self, inst_idx: int, qubit: int, pauli: str,
-                                    qubit2: int | None = None) -> stim.Circuit:
-        new_circuit = stim.Circuit()
-        for i, inst in enumerate(self.noiseless_flat):
-            if i == inst_idx:
-                if qubit2 is None:
-                    new_circuit.append(f"{pauli}_ERROR", [qubit], [1.0])
-                else:
-                    p0, p1 = pauli[0], pauli[1]
-                    if p0 != 'I':
-                        new_circuit.append(f"{p0}_ERROR", [qubit], [1.0])
-                    if p1 != 'I':
-                        new_circuit.append(f"{p1}_ERROR", [qubit2], [1.0])
-            new_circuit.append(inst)
-        return new_circuit
-
     def _calc_effect(self, fault: dict) -> dict:
-        if fault['gate'] == 'MPP':
-            new_circuit = self._build_mpp_fault_circuit(fault['inst_idx'], fault['target_idx'])
-        else:
-            new_circuit = self._build_pauli_fault_circuit(
-                fault['inst_idx'],
-                fault['qubit'],
-                fault['pauli'],
-                fault['qubit2'],
-            )
-        print(new_circuit)
+        """
+        noisy circuit에서 해당 fault만 p=1로, 나머지는 p=0으로 설정해서 효과 계산.
+        """
+        flat = list(self.circ.flattened())
+        new_circuit = stim.Circuit()
+        target_noisy_idx = fault['noisy_idx']
+
+        for i, inst in enumerate(flat):
+            if i != target_noisy_idx:
+                # 다른 noise gate는 p=0으로 (제거)
+                if inst.name in NOISE_GATES or inst.name in ('DEPOLARIZE1', 'DEPOLARIZE2'):
+                    pass  # skip
+                elif inst.name == 'MPP':
+                    args = inst.gate_args_copy()
+                    p = args[0] if args else 0.0
+                    if p > 0:
+                        # p=0인 noiseless MPP로 교체
+                        groups = str(inst).split()[1:]
+                        for group in groups:
+                            new_circuit += stim.Circuit(f"MPP {group}")
+                    else:
+                        new_circuit.append(inst)
+                else:
+                    new_circuit.append(inst)
+            else:
+                # 이 fault만 p=1로
+                gate = fault['gate']
+                if gate in NOISE_GATES:
+                    new_circuit.append(f"{fault['pauli']}_ERROR", [fault['qubit']], [1.0])
+                elif gate == 'DEPOLARIZE1':
+                    new_circuit.append(f"{fault['pauli']}_ERROR", [fault['qubit']], [1.0])
+                elif gate == 'DEPOLARIZE2':
+                    p0, p1 = fault['pauli'][0], fault['pauli'][1]
+                    if p0 != 'I':
+                        new_circuit.append(f"{p0}_ERROR", [fault['qubit']], [1.0])
+                    if p1 != 'I':
+                        new_circuit.append(f"{p1}_ERROR", [fault['qubit2']], [1.0])
+                elif gate == 'MPP':
+                    groups = str(inst).split()[1:]
+                    for j, group in enumerate(groups):
+                        if j == fault['target_idx']:
+                            new_circuit += stim.Circuit(f"MPP(1.0) {group}")
+                        else:
+                            new_circuit += stim.Circuit(f"MPP {group}")
+
         sim = stim.FlipSimulator(batch_size=1, disable_stabilizer_randomization=True)
         sim.do(new_circuit)
-        det_flips = sim.get_detector_flips(instance_index=0)
-        pauli_frame = sim.peek_pauli_flips(instance_index=0)
+        det_flips     = sim.get_detector_flips(instance_index=0)
+        pauli_frame   = sim.peek_pauli_flips(instance_index=0)
         meas_flips_raw = sim.get_measurement_flips(instance_index=0)
 
         det_array = np.zeros(self.n_detectors, dtype=int)
@@ -189,11 +176,11 @@ class ErrorSimulator:
 
         z_errors = np.zeros(self.n_qubits, dtype=int)
         x_errors = np.zeros(self.n_qubits, dtype=int)
-        for i, p in enumerate(pauli_frame):
-            if p in (3, 2):
-                z_errors[i] = 1
+        for k, p in enumerate(pauli_frame):
+            if p in (2, 3):
+                z_errors[k] = 1
             if p in (1, 2):
-                x_errors[i] = 1
+                x_errors[k] = 1
 
         meas_flips = np.zeros(self.n_meas, dtype=int)
         for m in np.where(meas_flips_raw)[0]:
@@ -216,10 +203,10 @@ class ErrorSimulator:
 
     def explain_fault(self, fault_idx: int) -> None:
         f = self.fault_list[fault_idx]
-        inst = self.noiseless_flat[f['inst_idx']]
+        flat = list(self.circ.flattened())
+        inst = flat[f['noisy_idx']]
         print(f"fault_idx={fault_idx}, gate={f['gate']}, qubit={f['qubit']}, pauli={f['pauli']}")
-        print(f"  -> inst_idx={f['inst_idx']}: {inst}")
-        # print(f"  -> prev_inst: {self.noiseless_flat[f['inst_idx']-1]}")
+        print(f"  -> noisy_idx={f['noisy_idx']}: {inst}")
         if f['gate'] == 'MPP':
             print(f"  -> mpp_group: {f['mpp_group']}")
         elif f.get('qubit2') is not None:
@@ -229,14 +216,16 @@ class ErrorSimulator:
         self,
         fault_qubit: int | None = None,  # fault가 직접 발생하는 qubit
         gate: str | None = None,          # 'Z_ERROR', 'X_ERROR', 'MPP' 등
-        inst_idx: int | None = None,      # noiseless instruction index
+        noisy_idx: int | None = None,     # noisy circuit instruction index
+        mpp_check: str | None = None,     # MPP fault의 mpp_group 문자열
     ) -> list[dict]:
         """
         fault_list 필드 기준으로 fault 필터링. 모든 조건은 AND로 적용됨.
 
         fault_qubit: fault가 직접 발생하는 qubit (fault_list의 'qubit' 필드)
         gate:        gate 종류 ('Z_ERROR', 'X_ERROR', 'Y_ERROR', 'MPP' 등)
-        inst_idx:    noiseless instruction index
+        noisy_idx:   noisy circuit instruction index
+        mpp_check:   MPP fault의 mpp_group 문자열 (gate='MPP'일 때만 유효)
         """
         results = []
         for i, f in enumerate(self.fault_list):
@@ -244,14 +233,14 @@ class ErrorSimulator:
                 continue
             if gate is not None and f['gate'] != gate:
                 continue
-            if inst_idx is not None and f['inst_idx'] != inst_idx:
+            if noisy_idx is not None and f['noisy_idx'] != noisy_idx:
                 continue
-            inst = self.noiseless_flat[f['inst_idx']]
+            if mpp_check is not None and f.get('mpp_group') != mpp_check:
+                continue
             results.append({
                 'fault_idx': i,
                 'fault': f,
-                'inst_idx': f['inst_idx'],
-                'instruction': inst,
+                'noisy_idx': f['noisy_idx'],
             })
         return results
 
@@ -407,12 +396,10 @@ class LogicalFaultAnalyzer:
         for i, qubits in fault_map.items():
             if qubit_idx in qubits:
                 f = self.fault_list[i]
-                inst = self.error_sim.noiseless_flat[f['inst_idx']]
                 results.append({
                     'fault_idx': i,
                     'fault': f,
-                    'inst_idx': f['inst_idx'],
-                    'instruction': inst,
+                    'noisy_idx': f['noisy_idx'],
                 })
         return results
 
@@ -547,9 +534,8 @@ class SurgeryLogicalFaultAnalyzer:
 
     def is_surgery_logical_fault(self, e_vec: np.ndarray) -> bool:
         # undetectable 조건
-        
         if not np.all(self.H_dem @ e_vec % 2 == 0):
-            print("It is detectable.")
+            print("It is detectable!")
             return False
 
         # e_vec에 해당하는 fault들의 효과 합산
@@ -561,15 +547,18 @@ class SurgeryLogicalFaultAnalyzer:
                 meas_flips ^= self.error_sim.fault_meas_flips[i]
                 z_errors ^= self.error_sim.fault_z_errors[i]
                 x_errors ^= self.error_sim.fault_x_errors[i]
-        print("meas_flips: ")
-        print(np.where(meas_flips>0))
-
+        print("meas_flips:")
+        print(meas_flips)
+        print("z_errors: ")
+        print(z_errors)
+        print("x_errors: ")
+        print(x_errors)
         # --- 조건 2: XX measurement outcome 오류 ---
         xx_outcome = 0
         for idx in self.av_merge0_meas_indices:
             xx_outcome ^= meas_flips[idx]
         if xx_outcome == 1:
-            print("XX measurement result is wrong.")
+            print("The XX measurement outcome is wrong!")
             return True
 
         # --- 조건 1: code block logical error ---
