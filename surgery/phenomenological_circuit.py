@@ -237,7 +237,7 @@ class SurgeryCircuitScheduler:
 
         # split: ancilla qubit MZ 측정 (|0> init과 같은 basis)
         schedule.instructions[tick].append(
-            Instruction(tick, "M", a_data_qubits, gate_args=[0], label="split")
+            Instruction(tick, "M", a_data_qubits, gate_args=[self.p_meas], label="split")
         )
         # tick += 1 
         # split -> post 넘어갈 때는 tick 안넘어가야함.

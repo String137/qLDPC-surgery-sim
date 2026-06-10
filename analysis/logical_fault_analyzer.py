@@ -20,7 +20,8 @@ class ErrorSimulator:
 
     주요 속성:
         fault_list      : list[dict] — 각 fault 정보
-                          {inst_idx, target_idx, qubit, gate, pauli, qubit2, [mpp_group]}
+                          {noisy_idx, target_idx, qubit, gate, pauli, qubit2, round, [mpp_group]}
+        round_of        : dict[noisy_idx -> round]  (TICK 카운트 기반)
         H_dem           : (n_detectors, n_faults) — fault → detector flip 행렬
         fault_z_errors  : (n_faults, n_qubits)   — fault → 최종 Z pauli frame
         fault_x_errors  : (n_faults, n_qubits)   — fault → 최종 X pauli frame
@@ -31,6 +32,9 @@ class ErrorSimulator:
         self.n_qubits    = circ.num_qubits
         self.n_detectors = circ.detector_error_model(decompose_errors=False).num_detectors
         self.n_meas      = circ.num_measurements
+
+        self.round_of   = self._build_round_map()
+        self.n_rounds   = max(self.round_of.values()) + 1 if self.round_of else 0
 
         self.fault_list = self._build_fault_list()
         self.n_faults   = len(self.fault_list)
@@ -47,6 +51,20 @@ class ErrorSimulator:
             self.fault_x_errors[j]   = effect['x_errors']
             self.fault_meas_flips[j] = effect['meas_flips']
 
+    def _build_round_map(self) -> dict:
+        """
+        flattened circuit의 각 instruction index -> round 번호.
+        TICK을 만날 때마다 round +1. TICK 이전(맨 앞)은 round 0.
+        """
+        flat = list(self.circ.flattened())
+        round_of = {}
+        r = 0
+        for idx, inst in enumerate(flat):
+            if inst.name == 'TICK':
+                r += 1
+            round_of[idx] = r
+        return round_of
+
     def _build_fault_list(self) -> list[dict]:
         """
         fault dict 필드:
@@ -56,12 +74,15 @@ class ErrorSimulator:
             gate       : 'Z_ERROR', 'X_ERROR', 'Y_ERROR', 'DEPOLARIZE1', 'DEPOLARIZE2', 'MPP'
             pauli      : 발생하는 Pauli ('X', 'Y', 'Z', 또는 'IX' 등 2-qubit, MPP는 None)
             qubit2     : DEPOLARIZE2의 두 번째 qubit (나머지는 None)
+            round      : 해당 instruction의 round 번호 (TICK 카운트)
             mpp_group  : MPP fault일 때 해당 group 문자열 (나머지는 없음)
         """
         flat = list(self.circ.flattened())
         fault_list = []
 
         for noisy_idx, inst in enumerate(flat):
+            cur_round = self.round_of[noisy_idx]
+
             if inst.name in NOISE_GATES:
                 for j, t in enumerate(inst.targets_copy()):
                     fault_list.append({
@@ -71,6 +92,7 @@ class ErrorSimulator:
                         'gate':       inst.name,
                         'pauli':      inst.name[0],
                         'qubit2':     None,
+                        'round':      cur_round,
                     })
 
             elif inst.name == 'DEPOLARIZE1':
@@ -83,6 +105,7 @@ class ErrorSimulator:
                             'gate':       'DEPOLARIZE1',
                             'pauli':      pauli,
                             'qubit2':     None,
+                            'round':      cur_round,
                         })
 
             elif inst.name == 'DEPOLARIZE2':
@@ -98,6 +121,7 @@ class ErrorSimulator:
                             'gate':       'DEPOLARIZE2',
                             'pauli':      pauli,
                             'qubit2':     q1,
+                            'round':      cur_round,
                         })
 
             elif inst.name == 'MPP':
@@ -113,7 +137,23 @@ class ErrorSimulator:
                             'gate':       'MPP',
                             'pauli':      None,
                             'qubit2':     None,
+                            'round':      cur_round,
                             'mpp_group':  group,
+                        })
+
+            elif inst.name == 'M':
+                args = inst.gate_args_copy()
+                p = args[0] if args else 0.0
+                if p > 0:
+                    for j, t in enumerate(inst.targets_copy()):
+                        fault_list.append({
+                            'noisy_idx':  noisy_idx,
+                            'target_idx': j,
+                            'qubit':      t.value,
+                            'gate':       'M',
+                            'pauli':      None,
+                            'qubit2':     None,
+                            'round':      cur_round,
                         })
 
         return fault_list
@@ -141,6 +181,14 @@ class ErrorSimulator:
                             new_circuit += stim.Circuit(f"MPP {group}")
                     else:
                         new_circuit.append(inst)
+                elif inst.name == 'M':
+                    args = inst.gate_args_copy()
+                    p = args[0] if args else 0.0
+                    if p > 0:
+                        for t in inst.targets_copy():
+                            new_circuit.append('M', [t.value])  # noiseless
+                    else:
+                        new_circuit.append(inst)
                 else:
                     new_circuit.append(inst)
             else:
@@ -163,6 +211,12 @@ class ErrorSimulator:
                             new_circuit += stim.Circuit(f"MPP(1.0) {group}")
                         else:
                             new_circuit += stim.Circuit(f"MPP {group}")
+                elif gate == 'M':
+                    for j, t in enumerate(inst.targets_copy()):
+                        if j == fault['target_idx']:
+                            new_circuit.append('M', [t.value], [1.0])
+                        else:
+                            new_circuit.append('M', [t.value])
 
         sim = stim.FlipSimulator(batch_size=1, disable_stabilizer_randomization=True)
         sim.do(new_circuit)
@@ -201,16 +255,14 @@ class ErrorSimulator:
             'meas_flips': self.fault_meas_flips[fault_idx],
         }
 
-    def explain_fault(self, fault_idx: int) -> None:
+    def explain_fault(self, fault_idx: int, file=None) -> None:
         f = self.fault_list[fault_idx]
-        flat = list(self.circ.flattened())
-        inst = flat[f['noisy_idx']]
-        print(f"fault_idx={fault_idx}, gate={f['gate']}, qubit={f['qubit']}, pauli={f['pauli']}")
-        print(f"  -> noisy_idx={f['noisy_idx']}: {inst}")
+        print(f"fault_idx={fault_idx}, gate={f['gate']}, qubit={f['qubit']}, "
+              f"pauli={f['pauli']}, round={f['round']}", file=file)
         if f['gate'] == 'MPP':
-            print(f"  -> mpp_group: {f['mpp_group']}")
+            print(f"  -> mpp_group: {f['mpp_group']}", file=file)
         elif f.get('qubit2') is not None:
-            print(f"  -> qubits: ({f['qubit']}, {f['qubit2']})")
+            print(f"  -> qubits: ({f['qubit']}, {f['qubit2']})", file=file)
 
     def find_faults(
         self,
@@ -218,6 +270,7 @@ class ErrorSimulator:
         gate: str | None = None,          # 'Z_ERROR', 'X_ERROR', 'MPP' 등
         noisy_idx: int | None = None,     # noisy circuit instruction index
         mpp_check: str | None = None,     # MPP fault의 mpp_group 문자열
+        round: int | None = None,         # round 번호
     ) -> list[dict]:
         """
         fault_list 필드 기준으로 fault 필터링. 모든 조건은 AND로 적용됨.
@@ -226,6 +279,7 @@ class ErrorSimulator:
         gate:        gate 종류 ('Z_ERROR', 'X_ERROR', 'Y_ERROR', 'MPP' 등)
         noisy_idx:   noisy circuit instruction index
         mpp_check:   MPP fault의 mpp_group 문자열 (gate='MPP'일 때만 유효)
+        round:       round 번호 (TICK 카운트)
         """
         results = []
         for i, f in enumerate(self.fault_list):
@@ -237,10 +291,13 @@ class ErrorSimulator:
                 continue
             if mpp_check is not None and f.get('mpp_group') != mpp_check:
                 continue
+            if round is not None and f['round'] != round:
+                continue
             results.append({
                 'fault_idx': i,
                 'fault': f,
                 'noisy_idx': f['noisy_idx'],
+                'round': f['round'],
             })
         return results
 
@@ -345,11 +402,16 @@ class LogicalFaultAnalyzer:
 
         return any(int(L_list[i] @ final % 2) for i in observable_indices)
 
-    def explain(self, e_vec: np.ndarray) -> None:
+    def explain(self, e_vec: np.ndarray, file=None) -> None:
         for i, ei in enumerate(e_vec):
             if ei == 1:
-                self.error_sim.explain_fault(i)
-                print()
+                self.error_sim.explain_fault(i, file=file)
+                eff = self.error_sim.get_effect(i)
+                print(f"fault {i}: "
+                      f"det_flips={np.where(eff['det_flips'])[0]}, "
+                      f"z_errors={np.where(eff['z_errors'])[0]}, "
+                      f"x_errors={np.where(eff['x_errors'])[0]}, "
+                      f"meas_flips={np.where(eff['meas_flips'])[0]}", file=file)
 
     def find_min_weight(
         self,
@@ -407,7 +469,7 @@ class LogicalFaultAnalyzer:
 class SurgeryLogicalFaultAnalyzer:
     """
     Surgery logical error 정의:
-    
+
     1. split 이후 C1, C2 각각에 ideal decoder 적용 시 residual logical error가 남는 경우.
        - decoding 전 전처리: f0[i].weight() > 0인 deformed Z check i에 대해
          split MZ 결과로 prod_{e in γ} ω_e를 계산.
@@ -536,7 +598,7 @@ class SurgeryLogicalFaultAnalyzer:
         # undetectable 조건
         if not np.all(self.H_dem @ e_vec % 2 == 0):
             print("It is detectable!")
-            return False
+            # return False
 
         # e_vec에 해당하는 fault들의 효과 합산
         meas_flips = np.zeros(self.error_sim.n_meas, dtype=int)
@@ -559,7 +621,7 @@ class SurgeryLogicalFaultAnalyzer:
             xx_outcome ^= meas_flips[idx]
         if xx_outcome == 1:
             print("The XX measurement outcome is wrong!")
-            return True
+            # return True
 
         # --- 조건 1: code block logical error ---
         anc_meas = {q: meas_flips[idx] for q, idx in self.anc_q_to_meas_idx.items()}
@@ -579,6 +641,7 @@ class SurgeryLogicalFaultAnalyzer:
 
         n_c1z = len(self.merged.C1.z_checks())
         for i, f0_check in enumerate(self._f0):
+            print(f"i={i}, f0_check={f0_check}, weight={f0_check.weight()}")
             if f0_check.weight() == 0:
                 continue
             prod = 0
@@ -589,24 +652,39 @@ class SurgeryLogicalFaultAnalyzer:
                     syndrome_flip_c1[i] ^= 1
                 else:
                     syndrome_flip_c2[i - n_c1z] ^= 1
-
+        print("syndrome_flip_c1 ",syndrome_flip_c1)
+        print("syndrome_flip_c2 ",syndrome_flip_c2)
         # C1 logical error check (Z error → X logical)
         # syndrome_flip_c1: MZ 결과로 인한 Z check syndrome offset
-        c1_z = self._inner_ilp(z1, self.H_X1, syndrome_offset=syndrome_flip_c1)
+        c1_z = self._inner_ilp(z1, self.H_X1)
         final1_z = (z1 + c1_z) % 2
+        print("***** Codeblock 1 *****")
+        print("cumulated Z error: ",z1)
+        print("Z correction: ",c1_z)
+        print("Final Z error: ",final1_z)
         logical_err_c1_z = any(int(l @ final1_z % 2) for l in self.L_X1)
 
-        c1_x = self._inner_ilp(x1, self.H_Z1)
+        c1_x = self._inner_ilp(x1, self.H_Z1, syndrome_offset=syndrome_flip_c1)
         final1_x = (x1 + c1_x) % 2
+        print("cumulated X error: ",x1)
+        print("X correction: ",c1_x)
+        print("Final X error: ",final1_x)
         logical_err_c1_x = any(int(l @ final1_x % 2) for l in self.L_Z1)
 
         # C2 logical error check
-        c2_z = self._inner_ilp(z2, self.H_X2, syndrome_offset=syndrome_flip_c2)
+        c2_z = self._inner_ilp(z2, self.H_X2)
         final2_z = (z2 + c2_z) % 2
+        print("***** Codeblock 2 *****")
+        print("cumulated Z error: ",z2)
+        print("Z correction: ",c2_z)
+        print("Final Z error: ",final2_z)
         logical_err_c2_z = any(int(l @ final2_z % 2) for l in self.L_X2)
 
-        c2_x = self._inner_ilp(x2, self.H_Z2)
+        c2_x = self._inner_ilp(x2, self.H_Z2, syndrome_offset=syndrome_flip_c2)
         final2_x = (x2 + c2_x) % 2
+        print("cumulated X error: ",x2)
+        print("X correction: ",c2_x)
+        print("Final X error: ",final2_x)
         logical_err_c2_x = any(int(l @ final2_x % 2) for l in self.L_Z2)
 
         return logical_err_c1_z or logical_err_c1_x or logical_err_c2_z or logical_err_c2_x
@@ -662,8 +740,12 @@ class SurgeryLogicalFaultAnalyzer:
             print("Max iterations reached.")
         return None
 
-    def explain(self, e_vec: np.ndarray) -> None:
-        for i, ei in enumerate(e_vec):
-            if ei == 1:
-                self.error_sim.explain_fault(i)
-                print()
+    def explain(self, idxs, file=None) -> None:
+        for idx in idxs:
+            self.error_sim.explain_fault(idx, file=file)
+            eff = self.error_sim.get_effect(idx)
+            print(f"fault {idx}: "
+                  f"det_flips={np.where(eff['det_flips'])[0]}, "
+                  f"z_errors={np.where(eff['z_errors'])[0]}, "
+                  f"x_errors={np.where(eff['x_errors'])[0]}, "
+                  f"meas_flips={np.where(eff['meas_flips'])[0]}", file=file)
