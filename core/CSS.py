@@ -348,7 +348,110 @@ class CSS:
             self.calculate_distance()
         return self.dx, self.dz
 
-########################
+# Classical Linear Code
+class LinearCode:
+    def __init__(self, H: list[list[int]]):
+        self.F = galois.GF(2) # Field
+        self.H = self.F(np.array(H))
+        self.n = self.H.shape[1]
+        
+        self.k = self.calculate_k()
+        self.G = self.calculate_generator_matrix()
+
+    def calculate_k(self,):
+        rank_H = np.linalg.matrix_rank(self.H)
+        return int(self.n - rank_H)
+
+    def calculate_generator_matrix(self,):
+        # H의 null space를 구해서 G를 생성
+        G = self.H.null_space()
+        G_rref = G.row_reduce()
+    
+        self.G = G_rref
+        return self.G
+
+    def get_distance(self):
+        k = self.k
+        if k == 0:
+            return float('inf')          # 영벡터뿐, nonzero codeword 없음
+
+        G = np.asarray(self.G, dtype=int)  # k x n, GF(2)
+
+        # 각 generator 행을 정수 bitmask로 packing
+        rows = [0] * k
+        for r in range(k):
+            v = 0
+            for j in range(self.n):
+                if G[r, j]:
+                    v |= 1 << j
+            rows[r] = v
+
+        # Gray code로 2^k codeword 전부 순회:
+        # 연속한 subset이 행 하나 차이라 스텝당 XOR 한 번
+        d = self.n
+        cur = 0
+        for i in range(1, 1 << k):
+            b = (i & -i).bit_length() - 1   # 뒤집히는 비트 인덱스 (trailing zeros)
+            cur ^= rows[b]
+            w = cur.bit_count()             # popcount, Python 3.10+
+            if w < d:
+                d = w
+        return d
+
+
+class HGPCode(CSS):
+    """
+    H_X = [H_a ⊗ I | I ⊗ H_b^T]
+    H_Z = [I ⊗ H_b | H_a^T ⊗ I]
+    """
+    def __init__(self, Ca: LinearCode, Cb: LinearCode):
+        self.Ca = Ca
+        self.Cb = Cb
+        self.F = galois.GF(2)
+        Hx = np.hstack([np.kron(Ca.H, np.eye(Cb.n, dtype=int)), np.kron(np.eye(Ca.n-Ca.k, dtype=int), Cb.H.T)])
+        Hz = np.hstack([np.kron(np.eye(Ca.n, dtype=int), Cb.H), np.kron(Ca.H.T, np.eye(Cb.n-Cb.k, dtype=int))])
+        
+        super().__init__(galois.GF(2)(Hx), galois.GF(2)(Hz))
+        self.init_logical_representatives()
+    
+    @staticmethod
+    def _e(length, idx):
+        return np.eye(1, length, idx, dtype=int)
+
+    def init_logical_representatives(self):
+        self.CaT = LinearCode(self.Ca.H.T)
+        self.CbT = LinearCode(self.Cb.H.T)
+
+        n_a, n_b = self.Ca.n, self.Cb.n
+        r_a, r_b = self.Ca.H.shape[0], self.Cb.H.shape[0]
+        k_a, k_b   = self.Ca.k, self.Cb.k
+        k_aT, k_bT = self.CaT.k, self.CbT.k
+
+        Ga  = np.asarray(self.Ca.G,  dtype=int)
+        Gb  = np.asarray(self.Cb.G,  dtype=int)
+        GaT = np.asarray(self.CaT.G, dtype=int)
+        GbT = np.asarray(self.CbT.G, dtype=int)
+
+        zvv = np.zeros((1, n_a * n_b), dtype=int)
+        zcc = np.zeros((1, r_a * r_b), dtype=int)
+
+        # Family 1 (VV): systematic이라 info set = 앞 k열 → e_j (j in range(k))
+        for i in range(k_a):
+            for j in range(k_b):
+                m = i * k_b + j
+                z = np.hstack([np.kron(Ga[i:i+1], self._e(n_b, j)), zcc])   # [ l_a^i ⊗ e_j | 0 ]
+                x = np.hstack([np.kron(self._e(n_a, i), Gb[j:j+1]), zcc])   # [ e_i ⊗ l_b^j | 0 ]
+                self.set_logical_representative("Z", m, z.flatten())
+                self.set_logical_representative("X", m, x.flatten())
+
+        # Family 2 (CC): full-rank H면 비어있음
+        for i in range(k_aT):
+            for j in range(k_bT):
+                m = k_a * k_b + i * k_bT + j
+                z = np.hstack([zvv, np.kron(self._e(r_a, i), GbT[j:j+1])])  # [ 0 | e_i ⊗ l_bT^j ]
+                x = np.hstack([zvv, np.kron(GaT[i:i+1], self._e(r_b, j))])  # [ 0 | l_aT^i ⊗ e_j ]
+                self.set_logical_representative("Z", m, z.flatten())
+                self.set_logical_representative("X", m, x.flatten())
 
 class LPCode(CSS):
     """
