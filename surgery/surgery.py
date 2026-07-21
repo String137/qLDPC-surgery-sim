@@ -237,6 +237,90 @@ class ConePatch(CodePatch):
         raise NotImplementedError
 
 
+class _ConePatch(CodePatch):
+    """
+    ConePatch의 C 하나 있는 버전.
+    사실 이게 원래 ConePatch여야하는게 맞음.
+    # TODO: 언젠가 _ConePatch를 ConePatch로 바꾸고, ConePatch는 ConePatch2같은 다른 이름으로 바꾸자.
+    """
+
+    def __init__(
+        self,
+        C: CodePatch,
+        A: CodePatch,
+        f1t: list[Check],
+        f0: list[Check],
+        name: str = "cone",
+    ):
+        self._name = name
+        self.C = C
+        self.A  = A
+        self._f0 = f0
+        self._f1t = f1t
+
+        c_qubits = self.C.data_qubits()
+
+        a_qubits = A.data_qubits()
+        self._data_qubits = c_qubits + a_qubits
+
+        self._registry = QubitRegistry()
+        self._registry.register(c_qubits)
+        self._registry.register(a_qubits)
+
+        self.patch_name_dict = {
+            C._name: C,
+            A._name: A
+        }
+
+        partial0 = A.z_checks() if A.z_checks() else []
+        partial1t = A.x_checks() if A.x_checks() else []
+
+        assert len(C.z_checks()) == len(f0)
+        self._z_checks = C.z_checks()
+        for i in range(len(f0)):
+            if f0[i].weight() > 0:
+                self._z_checks[i] += f0[i]
+        for i in range(len(partial0)):
+            self._z_checks.append(partial0[i])
+
+        assert len(partial1t) == len(f1t)
+        self._x_checks = C.x_checks()
+        for i in range(len(f1t)):
+            self._x_checks.append(f1t[i] + partial1t[i])
+
+        
+
+    @property
+    def name(self) -> str: return self._name
+
+    def data_qubits(self) -> list[Qubit]: return self._data_qubits
+    def x_checks(self)   -> list[Check]:  return self._x_checks
+    def z_checks(self)   -> list[Check]:  return self._z_checks
+    def x_logicals(self):                 return self._x_logicals
+    def z_logicals(self):                 return self._z_logicals
+    def make_registry(self) -> QubitRegistry: return self._registry
+
+    def local_coord(self, q: Qubit) -> tuple[float, float]:
+        # ConePatch에서의 local_coord
+        lx, ly = self.patch_name_dict[q.patch_name].local_coord(q)
+        ox, oy = self.patch_name_dict[q.patch_name]._offset
+        return lx + ox, ly + oy
+    
+    def get_idx(self, q: Qubit) -> int:
+        return self._registry[q]
+
+    def h_x_tilde(self) -> np.ndarray:
+        """H̃_X = [H_X | 0 ; f1^T | ∂1^T]"""
+        # TODO
+        # 굳이 구현 안해도 될 듯. x_checks()에서 이미 implicit하게 표현되어 있음.
+        raise NotImplementedError
+
+    def h_z_tilde(self) -> np.ndarray:
+        """H̃_Z = [H_Z | f0 ; ∂0 | 0]"""
+        # TODO
+        raise NotImplementedError
+
+
 
 class MergedCodeWithGraph(ConePatch):
     """ 
@@ -353,6 +437,22 @@ class MergedCodeWithGraph(ConePatch):
 
     # def get_idx(self, q: Qubit) -> int:
     #     return self._registry[q]
+
+
+class HighRateSurgeryPatch(_ConePatch):
+    """
+    
+    """
+    def __init__(
+            self,
+            C: CodePatch,
+            A: CodePatch
+        ) -> MergedCodeWithGraph:
+        self.f1t = None
+        self.f0 = None
+        self.gamma0 = None
+        self.gamma1 = None
+        super().__init__(C, A, self.f1t, self.f0, name="high-rate-surgery")
 
 def build_xx_cone_surface(d: int) -> ConePatch:
     C1 = SurfaceCode(d, patch_name="surf1", offset=(0.0,0.0))
