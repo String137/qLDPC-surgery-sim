@@ -15,7 +15,7 @@ import numpy as np
 from core.primitives import Qubit, Check, QubitRegistry
 from docplex.mp.model import Model
 from docplex.mp.progress import ProgressClock
-from core.CSS import CSS, LPCode, RotatedSurfaceCode
+from core.CSS import CSS, LPCode, RotatedSurfaceCode, HGPCode
 import galois
 import networkx as nx
 from collections import deque
@@ -352,6 +352,24 @@ class TrivialCode(CodePatch):
         # Each data qubit is a logical Z
         return [frozenset([q]) for q in self._data_qubits]
 
+
+class HGPCodePatch(CodePatch):
+    def __init__(self, css: HGPCode, patch_name: str = "hgp", offset=(0.0,0.0), scale=(1,1)):
+        super().__init__(offset)
+        self._name = patch_name
+        self.set_css(css)
+        self.scale = scale
+        self.Ca = self.css.Ca
+        self.Cb = self.css.Cb
+    def name(self) -> str:
+        return self._name
+    def data_qubits(self) -> list[Qubit]: return self._data_qubits
+    def x_checks(self) -> list[Check]: return self._x_checks
+    def z_checks(self) -> list[Check]: return self._z_checks
+    def local_coord(self, q: Qubit):
+        raise NotImplementedError
+    def local_coord_chk(self, typ:str, idx:int):
+        raise NotImplementedError
 
 class LPCodePatch(CodePatch):
     def __init__(self, css: LPCode, patch_name: str = "lp", offset=(0.0, 0.0), scale=(1,1)):

@@ -11,6 +11,7 @@ surgery.py — MergedPatch, seam construction, stim circuit assembly
 from __future__ import annotations
 from dataclasses import dataclass
 import numpy as np
+from core.CSS import LinearCode
 from core.primitives import Qubit, Check, QubitRegistry
 from core.codes import *
 
@@ -438,20 +439,55 @@ class MergedCodeWithGraph(ConePatch):
     # def get_idx(self, q: Qubit) -> int:
     #     return self._registry[q]
 
+class Homomorphism:
+    def __init__(self, A: LinearCode, B: LinearCode, gamma1: np.ndarray):
+        self.A = A
+        self.B = B
+        # A의 k개 logical들이 B의 어떤 logical로 매핑되는지 (길이 k_B인 binary list로)
 
 class HighRateSurgeryPatch(_ConePatch):
     """
+    ### Input
+    Data Code C: possess a generalized parallel structure
+    Ancilla Code A = HGP(B,D), where B and D are classical linear codes
+    어려우니까 일단 C도 HGP라고 가정하자.
+    ### Description
+    This framework measures a set of logical operators $M$, where $M=\bigcup_i M_i$.
+    For i\in[k_D], 
+        \gamma_1^i(\ker \partial^B) = span\{M_i\} \in \ker \partial^C.
     
+        Since \gamma_1 maps \ker \partial^B into \ker \partial^C, there exists \gamma_0 that makes the "classical" diagram commutes
+
+        $\partial_1^C\gamma_1^i=\gamma_0^i\partial^B$
+
+    From "classical homomorphisms" $\gamma_0^i$ and $\gamma_1^i$, we can construct the chain map as following.
+
+        $$\Gamma_{0,1} = \sum\limits_{i\le k_D} \gamma_{0,1}^i\otimes (e_i^D)^T.$$
+
+    ### Constructing $\gamma_0$ from $\gamma_1$
+        $\partial_1^C\gamma_1^i=\gamma_0^i\partial^B$
+        $\partial_1^B$ is a $r\times n$ matrix and full row rank.
+        Therefore, there exists an **right inverse** $R$ of $\partial_1^B$, i.e. $\partial_1^B R = I_r$.
+        Then, $\gamma_0^i=\partial_1^C\gamma_1^i R$.
+
+    ### When the data code is HGP
+    If the data code $C$ is also a HGP Code, say C=HGP(B',F),
+        $\partial_1^B'\gamma_1^i=\gamma_0^i\partial^B$
+        - \gamma_1 maps \ker \partial^B into \ker \partial^B
     """
     def __init__(
             self,
-            C: CodePatch,
-            A: CodePatch
-        ) -> MergedCodeWithGraph:
+            C: HGPCodePatch,
+            A: HGPCodePatch
+        ):
+        print(C.x_checks())
         self.f1t = None
         self.f0 = None
-        self.gamma0 = None
-        self.gamma1 = None
+        self.gamma0 = []
+        self.gamma1 = []    # A.Ca -> B.Ca로 가는 homomorphism들의 list
+        # A.Ca의 logical을 B.Ca의 logical(trivial포함)으로 매핑하면 됨.
+        # [1 0 0 0 1]과 같이 A.Ca의 logical이 주어지면 HGPCodePatch에서의 Check객체들을 생성해야함. 
+        # i in [k_D]에 대해 gamma1^i, gamma0^i를 정의해야함.
         super().__init__(C, A, self.f1t, self.f0, name="high-rate-surgery")
 
 def build_xx_cone_surface(d: int) -> ConePatch:
