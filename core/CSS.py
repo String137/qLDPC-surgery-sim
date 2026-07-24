@@ -347,56 +347,114 @@ class CSS:
         if self.dx is None or self.dz is None:
             self.calculate_distance()
         return self.dx, self.dz
-
+def _v(x):
+    return "".join(str(int(b)) for b in np.asarray(x, dtype=int))
+ 
 # Classical Linear Code
 class LinearCode:
-    def __init__(self, H: list[list[int]]):
-        self.F = galois.GF(2) # Field
+    def __init__(self, H):
+        self.F = galois.GF(2)
         self.H = self.F(np.array(H))
         self.n = self.H.shape[1]
-        
         self.k = self.calculate_k()
         self.G = self.calculate_generator_matrix()
-
-    def calculate_k(self,):
-        rank_H = np.linalg.matrix_rank(self.H)
-        return int(self.n - rank_H)
-
-    def calculate_generator_matrix(self,):
-        # H의 null space를 구해서 G를 생성
-        G = self.H.null_space()
-        G_rref = G.row_reduce()
-    
-        self.G = G_rref
+ 
+    # ------------------------------------------------------------ 기본
+    def calculate_k(self):
+        return int(self.n - np.linalg.matrix_rank(self.H))
+ 
+    def calculate_generator_matrix(self):
+        self.G = self.H.null_space().row_reduce()
         return self.G
-
+ 
     def get_distance(self):
         k = self.k
         if k == 0:
-            return float('inf')          # 영벡터뿐, nonzero codeword 없음
-
-        G = np.asarray(self.G, dtype=int)  # k x n, GF(2)
-
-        # 각 generator 행을 정수 bitmask로 packing
-        rows = [0] * k
-        for r in range(k):
-            v = 0
-            for j in range(self.n):
-                if G[r, j]:
-                    v |= 1 << j
-            rows[r] = v
-
-        # Gray code로 2^k codeword 전부 순회:
-        # 연속한 subset이 행 하나 차이라 스텝당 XOR 한 번
-        d = self.n
-        cur = 0
+            return float('inf')
+        G = np.asarray(self.G, dtype=int)
+        rows = [sum(1 << j for j in range(self.n) if G[r, j]) for r in range(k)]
+        d, cur = self.n, 0
         for i in range(1, 1 << k):
-            b = (i & -i).bit_length() - 1   # 뒤집히는 비트 인덱스 (trailing zeros)
-            cur ^= rows[b]
-            w = cur.bit_count()             # popcount, Python 3.10+
+            cur ^= rows[(i & -i).bit_length() - 1]
+            w = cur.bit_count()
             if w < d:
                 d = w
         return d
+ 
+    @classmethod
+    def from_generator(cls, G):
+        F = galois.GF(2)
+        return cls(np.asarray(F(np.asarray(G, dtype=int)).null_space(), dtype=int))
+ 
+    # ------------------------------------------------------------ 구조
+    @property
+    def params(self):
+        return (self.n, self.k, self.get_distance())
+ 
+    def pivots(self):
+        """G(RREF)의 pivot 열."""
+        Gi = np.asarray(self.G, dtype=int)
+        return [int(np.nonzero(r)[0][0]) for r in Gi if r.any()]
+ 
+    def complement(self):
+        """pivot 이 아닌 열 (logical 의 여집합 basis 좌표)."""
+        piv = set(self.pivots())
+        return [j for j in range(self.n) if j not in piv]
+ 
+    def logicals(self):
+        """logical basis 벡터 리스트 (G 의 행)."""
+        return [self.G[i] for i in range(self.k)]
+ 
+    def codewords(self):
+        """(label, vector) 전체 codeword."""
+        out = []
+        for m in range(1 << self.k):
+            w = self.F(np.zeros(self.n, dtype=int))
+            lab = []
+            for i in range(self.k):
+                if m >> i & 1:
+                    w = w + self.G[i]
+                    lab.append(f"L{i+1}")
+            out.append(("+".join(lab) if lab else "0", w))
+        return out
+ 
+    def decompose(self, vec):
+        """codeword 를 logical basis 계수로 분해. codeword 가 아니면 None."""
+        vec = self.F(np.asarray(vec, dtype=int))
+        if np.any(self.H @ vec):
+            return None
+        aug = self.F(np.hstack((np.asarray(self.G.T, dtype=int),
+                                np.asarray(vec, dtype=int).reshape(-1, 1))))
+        R = np.asarray(aug.row_reduce(), dtype=int)
+        c = np.zeros(self.k, dtype=int)
+        for r in R:
+            nz = np.nonzero(r[:self.k])[0]
+            if len(nz):
+                c[nz[0]] = r[self.k]
+        return c
+ 
+    def label(self, vec):
+        c = self.decompose(vec)
+        if c is None:
+            return "(not a codeword)"
+        t = " + ".join(f"L{i+1}" for i in range(self.k) if c[i])
+        return t or "0"
+ 
+    def report(self, name="code", show_codewords=True):
+        print("=" * 60)
+        print(f"{name} = [{self.n},{self.k},{self.get_distance()}]")
+        print("=" * 60)
+        print("H:")
+        print(np.asarray(self.H, dtype=int))
+        print(f"\nlogical basis ({self.k}개):")
+        for i, L in enumerate(self.logicals()):
+            print(f"   L{i+1} = {_v(L)}   (wt {int(np.asarray(L, dtype=int).sum())})")
+        print(f"pivots {self.pivots()}, complement {self.complement()}")
+        if show_codewords and self.k <= 6:
+            print(f"\ncodeword {2**self.k}개:")
+            for lab, w in self.codewords():
+                print(f"   {lab:<12} = {_v(w)}  (wt {int(np.asarray(w, dtype=int).sum())})")
+        print()
 
 
 class HGPCode(CSS):

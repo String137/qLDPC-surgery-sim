@@ -14,6 +14,7 @@ import numpy as np
 from core.CSS import LinearCode
 from core.primitives import Qubit, Check, QubitRegistry
 from core.codes import *
+import itertools
 
 
 # ---------------------------------------------------------------------------
@@ -438,17 +439,30 @@ class MergedCodeWithGraph(ConePatch):
 
     # def get_idx(self, q: Qubit) -> int:
     #     return self._registry[q]
-
+def _v(x):
+    return "".join(str(int(b)) for b in np.asarray(x, dtype=int))
+ 
 class Homomorphism:
-    def __init__(self, A, B, ltol, ctol):
+    """A -> B classical code homomorphism.
+       ltol : (k_B, k_A)  logical 방향 지정
+       ctol : (n_B, r_A)  complement 방향 지정 (r_A = n_A - k_A). None 이면 자동 탐색."""
+ 
+    def __init__(self, A, B, ltol, ctol=None, auto=True, greedy=True, **kw):
         self.A, self.B = A, B
         self.F = A.F
-        self.ltol = self.F(np.asarray(ltol, dtype=int))
-        self.ctol = self.F(np.asarray(ctol, dtype=int))
         self.rA = A.n - A.k
+        self.ltol = self.F(np.asarray(ltol, dtype=int))
+        self.ctol_stats = None
+        if ctol is None:
+            ctol, self.ctol_stats = (self.search_ctol_greedy(**kw) if greedy
+                                     else self.search_ctol_exhaustive(**kw))
+        self.ctol = self.F(np.asarray(ctol, dtype=int))
         self._validate()
         self.gamma1 = None
         self.gamma0 = None
+        if auto:
+            self.set_map()
+            self.set_gamma0()
  
     def _validate(self):
         assert self.ltol.shape == (self.B.k, self.A.k), \
@@ -456,45 +470,116 @@ class Homomorphism:
         assert self.ctol.shape == (self.B.n, self.rA), \
             f"ctol must be (n_B,rank H_A)=({self.B.n},{self.rA}), got {self.ctol.shape}"
  
-    @staticmethod
-    def _pivots(M):
-        Mi = np.asarray(M, dtype=int)
-        return [int(np.nonzero(r)[0][0]) for r in Mi if r.any()]
+    # ------------------------------------------------------------ ctol 탐색
+    # gamma1 = C0 + ctol @ Q 이고 ctol 의 i번째 행은 gamma1 의 i번째 행에만 영향.
+    # -> 행별로 독립이라 "행별 최소 무게" 로 시작해서 열 무게 초과분만 고치면 된다.
  
+    def _row_candidates(self, max_cand=1 << 16):
+        """각 data qubit 행 i 에 대해 (gamma1 행벡터들, ctol 행벡터들)."""
+        if (1 << self.rA) > max_cand:
+            raise ValueError(f"2^r_A = {1 << self.rA} > max_cand; r_A 가 너무 큼")
+        Pinv = np.linalg.inv(self._basis_change())
+        C0 = np.asarray((self.B.G.T @ self.ltol) @ Pinv[:self.A.k, :], dtype=int)
+        Q = np.asarray(Pinv[self.A.k:, :], dtype=int)
+        xs = np.array(list(itertools.product([0, 1], repeat=self.rA)), dtype=int)
+        rows_add = (xs @ Q) % 2
+        return [((C0[i] + rows_add) % 2, xs) for i in range(self.B.n)]
+ 
+    @staticmethod
+    def _objective(rows):
+        mr, mc = int(rows.sum(axis=1).max()), int(rows.sum(axis=0).max())
+        return (max(mr, mc), mc, mr, int(rows.sum()))
+ 
+    @staticmethod
+    def _stats(o):
+        return dict(max_degree=o[0], max_col_wt=o[1], max_row_wt=o[2], total_wt=o[3])
+ 
+    def search_ctol_greedy(self, n_restarts=30, max_iter=500, seed=0, max_cand=1 << 16):
+        """행별 최소무게 초기화 -> 과부하 열을 고치는 local search (random restart)."""
+        cands = self._row_candidates(max_cand)
+        nB = self.B.n
+        rng = np.random.default_rng(seed)
+        wts = [c[0].sum(axis=1) for c in cands]
+        best = None
+        for t in range(n_restarts):
+            pick = []
+            for i in range(nB):
+                w = wts[i]
+                lo = w.min() if t == 0 else w.min() + (rng.integers(0, 2) if w.max() > w.min() else 0)
+                opts = np.nonzero(w <= lo)[0]
+                pick.append(int(rng.choice(opts)) if t else int(opts[0]))
+            pick = np.array(pick)
+            rows = np.array([cands[i][0][pick[i]] for i in range(nB)])
+            obj = self._objective(rows)
+            for _ in range(max_iter):
+                improved = False
+                for i in rng.permutation(nB):
+                    cur = pick[i]
+                    for j in range(cands[i][0].shape[0]):
+                        if j == cur:
+                            continue
+                        rows[i] = cands[i][0][j]
+                        o = self._objective(rows)
+                        if o < obj:
+                            obj, pick[i], cur, improved = o, j, j, True
+                        else:
+                            rows[i] = cands[i][0][cur]
+                if not improved:
+                    break
+            if best is None or obj < best[0]:
+                best = (obj, pick.copy())
+        obj, pick = best
+        ctol = np.array([cands[i][1][pick[i]] for i in range(nB)])
+        return ctol, self._stats(obj)
+ 
+    def search_ctol_exhaustive(self, max_enum=1 << 22, max_cand=1 << 16):
+        """작은 경우용 전수 탐색 (정답 확인용)."""
+        cands = self._row_candidates(max_cand)
+        nc = cands[0][0].shape[0]
+        if nc ** self.B.n > max_enum:
+            raise ValueError(f"search space {nc ** self.B.n} > max_enum")
+        best = None
+        for combo in itertools.product(range(nc), repeat=self.B.n):
+            rows = np.array([cands[i][0][combo[i]] for i in range(self.B.n)])
+            o = self._objective(rows)
+            if best is None or o < best[0]:
+                best = (o, combo)
+        o, combo = best
+        ctol = np.array([cands[i][1][combo[i]] for i in range(self.B.n)])
+        return ctol, self._stats(o)
+ 
+    # ------------------------------------------------------------ 구성
     def _basis_change(self):
+        """P: (logical ⊕ complement) 좌표 -> A_1 standard 좌표."""
         A, F = self.A, self.F
-        piv = set(self._pivots(A.G))
-        free = [j for j in range(A.n) if j not in piv]
+        free = A.complement()
         assert len(free) == self.rA
-        E = F(np.zeros((A.n, self.rA), dtype=int))
+        E = np.zeros((A.n, self.rA), dtype=int)
         for c, j in enumerate(free):
             E[j, c] = 1
-        return F(np.hstack((np.asarray(A.G.T, dtype=int), np.asarray(E, dtype=int))))
+        return F(np.hstack((np.asarray(A.G.T, dtype=int), E)))
  
     def set_map(self):
-        A, B, F = self.A, self.B, self.F
-        left = B.G.T @ self.ltol
-        M = F(np.hstack((np.asarray(left, dtype=int),
-                         np.asarray(self.ctol, dtype=int))))
-        P = self._basis_change()
-        self.gamma1 = M @ np.linalg.inv(P)
+        F = self.F
+        left = self.B.G.T @ self.ltol
+        M = F(np.hstack((np.asarray(left, dtype=int), np.asarray(self.ctol, dtype=int))))
+        self.gamma1 = M @ np.linalg.inv(self._basis_change())
         return self.gamma1
  
     @staticmethod
     def _solve_left(H, Y, F):
-        """X with X @ H = Y over GF(2). Handles rank-deficient / redundant H."""
+        """X with X @ H = Y over GF(2). rank-deficient / redundant H 도 처리."""
         m, n = H.shape
-        HT = np.asarray(H.T, dtype=int)
-        YT = np.asarray(Y.T, dtype=int)
-        R = np.asarray(F(np.hstack((HT, YT))).row_reduce(), dtype=int)
+        R = np.asarray(F(np.hstack((np.asarray(H.T, dtype=int),
+                                    np.asarray(Y.T, dtype=int)))).row_reduce(), dtype=int)
         for r in R:
             if not r[:m].any() and r[m:].any():
-                return None                      # unsolvable
-        XT = F(np.zeros((m, YT.shape[1]), dtype=int))
+                return None
+        XT = F(np.zeros((m, Y.shape[0]), dtype=int))
         for r in R:
             nz = np.nonzero(r[:m])[0]
             if len(nz):
-                XT[nz[0], :] = F(r[m:])          # free vars -> 0
+                XT[nz[0], :] = F(r[m:])
         return XT.T
  
     def set_gamma0(self):
@@ -511,8 +596,68 @@ class Homomorphism:
         assert np.array_equal(self.gamma0 @ self.A.H, self.B.H @ self.gamma1), "diagram not commuting"
         assert not np.any(self.B.H @ (self.gamma1 @ self.A.G.T)), "kernel condition violated"
         return True
-
-
+ 
+    # ------------------------------------------------------------ 분석
+    def degrees(self):
+        g = np.asarray(self.gamma1, dtype=int)
+        return dict(max_col_wt=max(int(g[:, j].sum()) for j in range(self.A.n)),
+                    max_row_wt=max(int(g[i, :].sum()) for i in range(self.B.n)),
+                    total_wt=int(g.sum()))
+ 
+    def logical_action(self):
+        """[(이름, A의 logical, 상, B에서의 label)]"""
+        out = []
+        for i, L in enumerate(self.A.logicals()):
+            img = self.gamma1 @ L
+            out.append((f"L{i+1}(A)", L, img, self.B.label(img)))
+        return out
+ 
+    def connections(self):
+        """ancilla bit -> data qubit"""
+        g = np.asarray(self.gamma1, dtype=int)
+        return {j: [int(x) for x in np.nonzero(g[:, j])[0]] for j in range(self.A.n)}
+ 
+    def check_action(self):
+        """A 의 check -> B 의 check"""
+        g0 = np.asarray(self.gamma0, dtype=int)
+        return {j: [int(t) for t in np.nonzero(g0[:, j])[0]] for j in range(g0.shape[1])}
+ 
+    def report(self, show_matrices=True):
+        print("=" * 60)
+        print(f"Homomorphism  A[{self.A.n},{self.A.k},{self.A.get_distance()}]"
+              f"  ->  B[{self.B.n},{self.B.k},{self.B.get_distance()}]")
+        print("=" * 60)
+        if self.ctol_stats:
+            print("ctol search:", self.ctol_stats)
+        if show_matrices:
+            print("ltol:\n", np.asarray(self.ltol, dtype=int))
+            print("ctol:\n", np.asarray(self.ctol, dtype=int))
+            print("\ngamma1:\n", np.asarray(self.gamma1, dtype=int))
+            print("gamma0:\n", np.asarray(self.gamma0, dtype=int))
+        print("\ndegrees:", self.degrees())
+ 
+        print("\nlogical action:")
+        for nm, L, img, lab in self.logical_action():
+            wl = int(np.asarray(L, dtype=int).sum())
+            wi = int(np.asarray(img, dtype=int).sum())
+            print(f"   {nm} = {_v(L)} (wt {wl})  ->  {_v(img)} (wt {wi})  =  {lab}")
+ 
+        print("\nconnections (ancilla bit -> data qubit):")
+        for j, t in self.connections().items():
+            print(f"   {j} -> {t}" + ("   << 빈 연결" if not t else ""))
+ 
+        print("\ncheck action (A check -> B check):")
+        for j, t in self.check_action().items():
+            print(f"   {j} -> {t}" + ("   << 빈 연결" if not t else ""))
+ 
+        print("\ncommuting on complement basis:")
+        for j in self.A.complement():
+            e = self.F(np.eye(self.A.n, dtype=int)[j])
+            l, r = self.gamma0 @ (self.A.H @ e), self.B.H @ (self.gamma1 @ e)
+            print(f"   e_{j}: gamma0(H_A e)={_v(l)}  H_B(gamma1 e)={_v(r)}  "
+                  f"{'OK' if np.array_equal(l, r) else 'MISMATCH'}")
+        print(f"\nverify(): {self.verify()}")
+ 
 class HighRateSurgeryPatch(_ConePatch):
     """
     ### Input
