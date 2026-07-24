@@ -440,10 +440,78 @@ class MergedCodeWithGraph(ConePatch):
     #     return self._registry[q]
 
 class Homomorphism:
-    def __init__(self, A: LinearCode, B: LinearCode, gamma1: np.ndarray):
-        self.A = A
-        self.B = B
-        # A의 k개 logical들이 B의 어떤 logical로 매핑되는지 (길이 k_B인 binary list로)
+    def __init__(self, A, B, ltol, ctol):
+        self.A, self.B = A, B
+        self.F = A.F
+        self.ltol = self.F(np.asarray(ltol, dtype=int))
+        self.ctol = self.F(np.asarray(ctol, dtype=int))
+        self.rA = A.n - A.k
+        self._validate()
+        self.gamma1 = None
+        self.gamma0 = None
+ 
+    def _validate(self):
+        assert self.ltol.shape == (self.B.k, self.A.k), \
+            f"ltol must be (k_B,k_A)=({self.B.k},{self.A.k}), got {self.ltol.shape}"
+        assert self.ctol.shape == (self.B.n, self.rA), \
+            f"ctol must be (n_B,rank H_A)=({self.B.n},{self.rA}), got {self.ctol.shape}"
+ 
+    @staticmethod
+    def _pivots(M):
+        Mi = np.asarray(M, dtype=int)
+        return [int(np.nonzero(r)[0][0]) for r in Mi if r.any()]
+ 
+    def _basis_change(self):
+        A, F = self.A, self.F
+        piv = set(self._pivots(A.G))
+        free = [j for j in range(A.n) if j not in piv]
+        assert len(free) == self.rA
+        E = F(np.zeros((A.n, self.rA), dtype=int))
+        for c, j in enumerate(free):
+            E[j, c] = 1
+        return F(np.hstack((np.asarray(A.G.T, dtype=int), np.asarray(E, dtype=int))))
+ 
+    def set_map(self):
+        A, B, F = self.A, self.B, self.F
+        left = B.G.T @ self.ltol
+        M = F(np.hstack((np.asarray(left, dtype=int),
+                         np.asarray(self.ctol, dtype=int))))
+        P = self._basis_change()
+        self.gamma1 = M @ np.linalg.inv(P)
+        return self.gamma1
+ 
+    @staticmethod
+    def _solve_left(H, Y, F):
+        """X with X @ H = Y over GF(2). Handles rank-deficient / redundant H."""
+        m, n = H.shape
+        HT = np.asarray(H.T, dtype=int)
+        YT = np.asarray(Y.T, dtype=int)
+        R = np.asarray(F(np.hstack((HT, YT))).row_reduce(), dtype=int)
+        for r in R:
+            if not r[:m].any() and r[m:].any():
+                return None                      # unsolvable
+        XT = F(np.zeros((m, YT.shape[1]), dtype=int))
+        for r in R:
+            nz = np.nonzero(r[:m])[0]
+            if len(nz):
+                XT[nz[0], :] = F(r[m:])          # free vars -> 0
+        return XT.T
+ 
+    def set_gamma0(self):
+        if self.gamma1 is None:
+            self.set_map()
+        g0 = self._solve_left(self.A.H, self.B.H @ self.gamma1, self.F)
+        assert g0 is not None, "no gamma0: gamma1(ker H_A) not in ker H_B"
+        self.gamma0 = g0
+        return self.gamma0
+ 
+    def verify(self):
+        if self.gamma0 is None:
+            self.set_gamma0()
+        assert np.array_equal(self.gamma0 @ self.A.H, self.B.H @ self.gamma1), "diagram not commuting"
+        assert not np.any(self.B.H @ (self.gamma1 @ self.A.G.T)), "kernel condition violated"
+        return True
+
 
 class HighRateSurgeryPatch(_ConePatch):
     """
