@@ -347,6 +347,7 @@ class CSS:
         if self.dx is None or self.dz is None:
             self.calculate_distance()
         return self.dx, self.dz
+
 def _v(x):
     return "".join(str(int(b)) for b in np.asarray(x, dtype=int))
  
