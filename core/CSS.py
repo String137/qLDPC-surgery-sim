@@ -460,58 +460,91 @@ class LinearCode:
 
 class HGPCode(CSS):
     """
-    H_X = [H_a ⊗ I | I ⊗ H_b^T]
-    H_Z = [I ⊗ H_b | H_a^T ⊗ I]
+    HGP(Ca, Cb).  1-dim chain: index1 = bit, index0 = check,  d = H.
+ 
+        X check :  Ca1 (x) Cb1   (na*nb)   idx (i,j) -> i*nb + j
+        qubit   :  Ca0 (x) Cb1   (ra*nb)   idx (b,j) -> b*nb + j            [block1]
+                   Ca1 (x) Cb0   (na*rb)   idx (i,s) -> ra*nb + i*rb + s    [block2]
+        Z check :  Ca0 (x) Cb0   (ra*rb)   idx (b,s) -> b*rb + s
+ 
+        H_X = [ Ha^T (x) I_nb | I_na (x) Hb^T ]
+        H_Z = [ I_ra (x) Hb   | Ha   (x) I_rb ]
+ 
+        ker d1 = ker(Ha) (x) ker(Hb)                 dim = ka*kb
+        k      = kaT*kb + ka*kbT
+ 
+    X-logical families:
+        F-I  :  ker(Ha) (x) e^{Cb0}   -> block2,  ka  * kbT
+        F-II :  e^{Ca0} (x) ker(Hb)   -> block1,  kaT * kb
+    logical index order: F-I 먼저 (m = p*kbT + q), 그 다음 F-II (m = ka*kbT + b*kb + t)
     """
+ 
     def __init__(self, Ca: LinearCode, Cb: LinearCode):
-        self.Ca = Ca
-        self.Cb = Cb
+        self.Ca, self.Cb = Ca, Cb
         self.F = galois.GF(2)
-        Hx = np.hstack([np.kron(Ca.H, np.eye(Cb.n, dtype=int)), np.kron(np.eye(Ca.n-Ca.k, dtype=int), Cb.H.T)])
-        Hz = np.hstack([np.kron(np.eye(Ca.n, dtype=int), Cb.H), np.kron(Ca.H.T, np.eye(Cb.n-Cb.k, dtype=int))])
-        
-        super().__init__(galois.GF(2)(Hx), galois.GF(2)(Hz))
+ 
+        Ha = np.asarray(Ca.H, dtype=int)
+        Hb = np.asarray(Cb.H, dtype=int)
+        self.na, self.ra = Ca.n, Ha.shape[0]
+        self.nb, self.rb = Cb.n, Hb.shape[0]
+        na, ra, nb, rb = self.na, self.ra, self.nb, self.rb
+ 
+        Hx = np.hstack([np.kron(Ha.T, np.eye(nb, dtype=int)),
+                        np.kron(np.eye(na, dtype=int), Hb.T)])
+        Hz = np.hstack([np.kron(np.eye(ra, dtype=int), Hb),
+                        np.kron(Ha, np.eye(rb, dtype=int))])
+ 
+        super().__init__(self.F(Hx % 2), self.F(Hz % 2))
         self.init_logical_representatives()
-    
+ 
+    # ---- index helpers (surgery 에서 raw 산술 안 하도록) -------------------
+    def x_check_idx(self, i, j):  return i * self.nb + j            # Ca1 x Cb1
+    def z_check_idx(self, b, s):  return b * self.rb + s            # Ca0 x Cb0
+    def qubit1_idx(self, b, j):   return b * self.nb + j            # Ca0 x Cb1
+    def qubit2_idx(self, i, s):   return self.ra * self.nb + i * self.rb + s
+ 
     @staticmethod
     def _e(length, idx):
         return np.eye(1, length, idx, dtype=int)
-
+ 
     def init_logical_representatives(self):
-        self.CaT = LinearCode(self.Ca.H.T)
-        self.CbT = LinearCode(self.Cb.H.T)
-
-        n_a, n_b = self.Ca.n, self.Cb.n
-        r_a, r_b = self.Ca.H.shape[0], self.Cb.H.shape[0]
-        k_a, k_b   = self.Ca.k, self.Cb.k
-        k_aT, k_bT = self.CaT.k, self.CbT.k
-
-        Ga  = np.asarray(self.Ca.G,  dtype=int)
-        Gb  = np.asarray(self.Cb.G,  dtype=int)
+        self.CaT = LinearCode(np.asarray(self.Ca.H, dtype=int).T)
+        self.CbT = LinearCode(np.asarray(self.Cb.H, dtype=int).T)
+ 
+        na, ra, nb, rb = self.na, self.ra, self.nb, self.rb
+        ka, kb = self.Ca.k, self.Cb.k
+        kaT, kbT = self.CaT.k, self.CbT.k
+ 
+        Ga = np.asarray(self.Ca.G, dtype=int)
+        Gb = np.asarray(self.Cb.G, dtype=int)
         GaT = np.asarray(self.CaT.G, dtype=int)
         GbT = np.asarray(self.CbT.G, dtype=int)
-
-        zvv = np.zeros((1, n_a * n_b), dtype=int)
-        zcc = np.zeros((1, r_a * r_b), dtype=int)
-
-        # Family 1 (VV): systematic이라 info set = 앞 k열 → e_j (j in range(k))
-        for i in range(k_a):
-            for j in range(k_b):
-                m = i * k_b + j
-                z = np.hstack([np.kron(Ga[i:i+1], self._e(n_b, j)), zcc])   # [ l_a^i ⊗ e_j | 0 ]
-                x = np.hstack([np.kron(self._e(n_a, i), Gb[j:j+1]), zcc])   # [ e_i ⊗ l_b^j | 0 ]
-                self.set_logical_representative("Z", m, z.flatten())
+ 
+        z1 = np.zeros((1, ra * nb), dtype=int)   # block1 zero
+        z2 = np.zeros((1, na * rb), dtype=int)   # block2 zero
+ 
+        # information bit = G(RREF) 의 pivot 열. 앞 k개라고 가정하면 안 됨.
+        pa, pb   = self.Ca.pivots(),  self.Cb.pivots()
+        paT, pbT = self.CaT.pivots(), self.CbT.pivots()
+ 
+        # F-I : block2 (Ca1 x Cb0).  X = l_Ca (x) e_q ,  Z = e_p (x) l_CbT
+        for p in range(ka):
+            for q in range(kbT):
+                m = p * kbT + q
+                x = np.hstack([z1, np.kron(Ga[p:p+1], self._e(rb, pbT[q]))])
+                z = np.hstack([z1, np.kron(self._e(na, pa[p]), GbT[q:q+1])])
                 self.set_logical_representative("X", m, x.flatten())
-
-        # Family 2 (CC): full-rank H면 비어있음
-        for i in range(k_aT):
-            for j in range(k_bT):
-                m = k_a * k_b + i * k_bT + j
-                z = np.hstack([zvv, np.kron(self._e(r_a, i), GbT[j:j+1])])  # [ 0 | e_i ⊗ l_bT^j ]
-                x = np.hstack([zvv, np.kron(GaT[i:i+1], self._e(r_b, j))])  # [ 0 | l_aT^i ⊗ e_j ]
                 self.set_logical_representative("Z", m, z.flatten())
+ 
+        # F-II : block1 (Ca0 x Cb1).  X = e_b (x) l_Cb ,  Z = l_CaT (x) e_t
+        for b in range(kaT):
+            for t in range(kb):
+                m = ka * kbT + b * kb + t
+                x = np.hstack([np.kron(self._e(ra, paT[b]), Gb[t:t+1]), z2])
+                z = np.hstack([np.kron(GaT[b:b+1], self._e(nb, pb[t])), z2])
                 self.set_logical_representative("X", m, x.flatten())
-
+                self.set_logical_representative("Z", m, z.flatten())
+ 
 class LPCode(CSS):
     """
         H_XR = [H_a\otimes_R I | I \otimes_R H_b]
