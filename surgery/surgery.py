@@ -657,7 +657,14 @@ class Homomorphism:
             print(f"   e_{j}: gamma0(H_A e)={_v(l)}  H_B(gamma1 e)={_v(r)}  "
                   f"{'OK' if np.array_equal(l, r) else 'MISMATCH'}")
         print(f"\nverify(): {self.verify()}")
- 
+
+class TrivialHomomorphism(Homomorphism):
+    """A -> B trivial homomorphism. ltol = 0, ctol = 0."""
+    def __init__(self, A, B):
+        ltol = np.zeros((B.k, A.k), dtype=int)
+        ctol = np.zeros((B.n, A.n - A.k), dtype=int)
+        super().__init__(A, B, ltol, ctol)
+
 class HighRateSurgeryPatch(_ConePatch):
     """
     ### Input
@@ -694,14 +701,28 @@ class HighRateSurgeryPatch(_ConePatch):
             A: HGPCodePatch
         ):
         print(C.x_checks())
+        self.C = C
+        self.A = A
         self.f1t = None
         self.f0 = None
-        self.gamma0 = []
-        self.gamma1 = []    # A.Ca -> B.Ca로 가는 homomorphism들의 list
+        self.gamma0 = [[None]*self.A.Cb.k]    
+        self.gamma1 = [[None]*self.A.Cb.k]    # A.Ca -> B.Ca로 가는 homomorphism들의 list, 길이 A.Cb.k짜리 List[Homomorphism]
         # A.Ca의 logical을 B.Ca의 logical(trivial포함)으로 매핑하면 됨.
         # [1 0 0 0 1]과 같이 A.Ca의 logical이 주어지면 HGPCodePatch에서의 Check객체들을 생성해야함. 
         # i in [k_D]에 대해 gamma1^i, gamma0^i를 정의해야함.
         super().__init__(C, A, self.f1t, self.f0, name="high-rate-surgery")
+    
+    def set_gamma(self, idx:int, ltol: np.array|list):
+        """
+        idx: A.Cb의 logical index
+        ltol: A.Ca의 logical을 B.Ca의 logical로 매핑하는 matrix
+        """
+        if isinstance(ltol, list):
+            ltol = np.array(ltol, dtype=int)
+        # gamma1^idx를 정의
+        self.gamma1[idx] = Homomorphism(self.A.Ca, self.C.Ca, ltol)
+        # gamma0^idx를 정의
+        self.gamma0[idx] = self.gamma1[idx].set_gamma0()
 
 def build_xx_cone_surface(d: int) -> ConePatch:
     C1 = SurfaceCode(d, patch_name="surf1", offset=(0.0,0.0))
