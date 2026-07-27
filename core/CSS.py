@@ -188,10 +188,10 @@ class CSS:
             dual_logic_ops = self.logical_x_repr
         A = G_opp
         b = self.F.Zeros((G_opp.shape[0],), dtype=int)
-        for primal_op in primal_logic_ops:
-            if primal_op is not None:
-                A = np.vstack((A, primal_op))
-                b = np.hstack((b, self.F(0)))
+        # for primal_op in primal_logic_ops:    # 제약조건 있어야할 이유 없음.
+        #     if primal_op is not None:
+        #         A = np.vstack((A, primal_op))
+        #         b = np.hstack((b, self.F(0)))
         for i, dual_op in enumerate(dual_logic_ops):
             if dual_op is not None:
                 A = np.vstack((A, dual_op))
