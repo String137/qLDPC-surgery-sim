@@ -4,7 +4,7 @@ from core.primitives import *
 from core.codes import *
 import numpy as np
 from surgery.circuit import *
-from surgery.surgery import MergedCodeWithGraph
+from surgery.surgery import MergedCodeWithGraph, HighRateSurgeryPatch
 
 
 class MemoryCircuitScheduler:
@@ -299,4 +299,163 @@ class SurgeryCircuitScheduler:
                 schedule.extra_detectors.append(detector)
 
         schedule.qubit_coords = {q: self.merged.local_coord(q) for q in all_qubits}
+        return schedule
+
+
+class HighRateSurgeryCircuitScheduler:
+    """
+    Phenomenological circuit for (Merged) HighRateSurgeryPatch.
+
+    Same pre/merge/post structure and detector strategy as
+    SurgeryCircuitScheduler above, generalized from the ancilla-graph
+    MergedCodeWithGraph to the ancilla-HGP-code HighRateSurgeryPatch /
+    ConePatch (Cs = list of data blocks, A = ancilla HGP code, f0/f1t the
+    chain maps ConePatch already stores):
+
+        pre-rounds  : each data block C_j measured alone, its own (undeformed)
+                      x/z checks
+        merge-rounds: the full merged code (S.x_checks()/z_checks()) measured
+                      -- data blocks' Z-checks deformed by f0 (ancilla qubits
+                      added), A's X-checks deformed by f1t (data qubits
+                      added), everything else unchanged
+        split       : A's qubits measured out (same basis as their |0> init)
+        post-rounds : each data block C_j measured alone again
+
+    Initialization: data qubits RX (|+>), A's qubits R (|0>).
+
+    Detectors (mirrors SurgeryCircuitScheduler's reasoning):
+        - auto (same Check object measured on consecutive ticks):
+            each block's X-checks (never deformed) across every boundary;
+            A's own Z-checks (never deformed, appear in merged_z_checks
+            unchanged) once a noiseless "ref" measurement is taken right
+            after A's reset -- ref -> merge_0 links up automatically.
+        - NOT auto, by design: A's X-checks (partial1t) only appear as new
+          composite objects f1t[i]+partial1t[i] starting at merge round 0 --
+          no earlier reference exists, so their first outcome is not a
+          detector; it's part of the measured logical operator.
+        - extra_detectors (added explicitly, one deformed Z-check i at a
+          time, using S._f0[i].weight() > 0 to find which ones are deformed):
+            pre -> merge   : (pre_last_tick, original) vs (merge_first_tick, deformed)
+            merge -> post  : (merge_last_tick, deformed) XOR (split_tick, f0 support qubits)
+                              XOR (post_first_tick, original) == 0
+    """
+
+    def __init__(self, S: HighRateSurgeryPatch, pre_round: int, merge_round: int,
+                 post_round: int, p_data: float, p_meas: float):
+        self.S = S
+        self.Cs = S.Cs
+        self.A = S.A
+        self.p_data = p_data
+        self.p_meas = p_meas
+        self.pre_round = pre_round
+        self.merge_round = merge_round
+        self.post_round = post_round
+
+    def build(self) -> CircuitSchedule:
+        c_data_qubits = [q for C in self.Cs for q in C.data_qubits()]
+        a_data_qubits = self.A.data_qubits()
+        all_qubits = self.S.data_qubits()
+
+        c_x_checks = [chk for C in self.Cs for chk in C.x_checks()]
+        c_z_checks = [chk for C in self.Cs for chk in C.z_checks()]
+        anc_z_checks = self.A.z_checks()          # partial0, unchanged in the merge
+
+        merged_x_checks = self.S.x_checks()
+        merged_z_checks = self.S.z_checks()
+
+        schedule = CircuitSchedule(set(all_qubits))
+        schedule.qubit_idxs = {q: self.S.get_idx(q) for q in all_qubits}
+        tick = 0
+
+        # tick 0: init. data qubits RX (|+>), ancilla qubits R (|0>)
+        schedule.instructions[tick].append(Instruction(tick, "RX", c_data_qubits))
+        schedule.instructions[tick].append(Instruction(tick, "R", a_data_qubits))
+        tick += 1
+
+        # tick 1: noiseless reference measurement of the (undeformed) data checks
+        schedule.instructions[tick].append(
+            Instruction(tick, "MPP", c_x_checks + c_z_checks, gate_args=[0], label="ref"))
+        tick += 1
+
+        # pre-rounds: each block measured alone
+        for r in range(self.pre_round):
+            schedule.instructions[tick].append(
+                Instruction(tick, "Z_ERROR", c_data_qubits, gate_args=[self.p_data]))
+            schedule.instructions[tick].append(
+                Instruction(tick, "X_ERROR", c_data_qubits, gate_args=[self.p_data]))
+            schedule.instructions[tick].append(
+                Instruction(tick, "MPP", c_x_checks + c_z_checks, gate_args=[self.p_meas], label=f"pre_{r}"))
+            tick += 1
+        # reference for A's own Z-checks, taken right before merge starts
+        schedule.instructions[tick - 1].append(
+            Instruction(tick - 1, "MPP", anc_z_checks, gate_args=[0], label="ref"))
+
+        # merge-rounds: full merged code
+        for r in range(self.merge_round):
+            schedule.instructions[tick].append(
+                Instruction(tick, "Z_ERROR", all_qubits, gate_args=[self.p_data]))
+            schedule.instructions[tick].append(
+                Instruction(tick, "X_ERROR", all_qubits, gate_args=[self.p_data]))
+            schedule.instructions[tick].append(
+                Instruction(tick, "MPP", merged_x_checks + merged_z_checks,
+                            gate_args=[self.p_meas], label=f"merge_{r}"))
+            tick += 1
+
+        # split: measure A's qubits out (same basis as their |0> init)
+        schedule.instructions[tick].append(
+            Instruction(tick, "M", a_data_qubits, gate_args=[self.p_meas], label="split"))
+        # no tick increment: split -> post stays on the same tick boundary
+
+        # post-rounds: each block measured alone again
+        for r in range(self.post_round):
+            schedule.instructions[tick].append(
+                Instruction(tick, "Z_ERROR", c_data_qubits, gate_args=[self.p_data]))
+            schedule.instructions[tick].append(
+                Instruction(tick, "X_ERROR", c_data_qubits, gate_args=[self.p_data]))
+            schedule.instructions[tick].append(
+                Instruction(tick, "MPP", c_x_checks + c_z_checks, gate_args=[self.p_meas], label=f"post_{r}"))
+            tick += 1
+
+        # final: noiseless MX of the data qubits
+        schedule.instructions[tick].append(
+            Instruction(tick, "MX", c_data_qubits, gate_args=[0], label="final_data"))
+
+        pre_last_tick = 1 + self.pre_round
+        merge_first_tick = 1 + self.pre_round + 1
+        merge_last_tick = 1 + self.pre_round + self.merge_round
+        split_tick = 1 + self.pre_round + self.merge_round + 1
+        # split does NOT get its own tick (build() deliberately reuses `tick`
+        # for the post-round loop right after appending the split M
+        # instruction, see the "no tick increment" comment above) -- so
+        # post_0 is measured at split_tick itself, not split_tick+1. Using
+        # +2 here (an easy copy-paste trap from the split_tick formula, and
+        # the original bug: SurgeryCircuitScheduler above has the identical
+        # off-by-one) points post_first_tick at the *final_data* MX tick
+        # instead, where no Z-check MPP was ever measured -- get_meas_idx()
+        # then silently returns an empty list rather than erroring, so the
+        # resulting extra_detector is missing its cancelling term and stim
+        # correctly reports "non-deterministic detectors" the first time
+        # anything actually validates it (e.g. detector_error_model()).
+        post_first_tick = split_tick
+
+        # pre -> merge boundary: deformed Z-checks
+        for i, f0_check in enumerate(self.S._f0):
+            if f0_check.weight() > 0:
+                schedule.extra_detectors.append([
+                    (pre_last_tick, c_z_checks[i]),
+                    (merge_first_tick, merged_z_checks[i]),
+                ])
+
+        # merge -> post boundary (split): deformed Z-checks
+        for i, f0_check in enumerate(self.S._f0):
+            if f0_check.weight() > 0:
+                detector = [
+                    (merge_last_tick, merged_z_checks[i]),
+                    (post_first_tick, c_z_checks[i]),
+                ]
+                for q in f0_check.qubits:
+                    detector.append((split_tick, q))
+                schedule.extra_detectors.append(detector)
+
+        schedule.qubit_coords = {q: self.S.local_coord(q) for q in all_qubits}
         return schedule

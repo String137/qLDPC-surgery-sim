@@ -48,803 +48,334 @@ def solve_gf2(A: galois.FieldArray, b: galois.FieldArray):
 
     return x_particular, x_null
 
-# class CSS:
-#     def __init__(self, Gx, Gz):
-#         self.n = Gx.shape[1]
-#         self.Gx = Gx
-#         self.Gz = Gz
-#         self.F = galois.GF(2) # Field
-#         self.get_center()
-#         self.k = self.calculate_k()
-#         self.logical_x_repr = [None] * self.k    # X logical representatives
-#         self.logical_z_repr = [None] * self.k    # Z logical representatives
-#         self.d = None
-#         self.dx = None
-#         self.dz = None
+class CSS:
+    def __init__(self, Gx, Gz):
+        self.n = Gx.shape[1]
+        self.Gx = Gx
+        self.Gz = Gz
+        self.F = galois.GF(2) # Field
+        self.get_center()
+        self.k = self.calculate_k()
+        self.logical_x_repr = [None] * self.k    # X logical representatives
+        self.logical_z_repr = [None] * self.k    # Z logical representatives
+        self.d = None
+        self.dx = None
+        self.dz = None
+        self.dx_i = [None] * self.k    # logical qubit 별 보호수준 (protection level)
+        self.dz_i = [None] * self.k
 
 
-#     def get_center(self,):
-#         s = (self.Gz @ self.Gx.T).null_space()
-#         self.Hx = s.T @ self.Gx
-#         s = (self.Gx @ self.Gz.T).null_space()
-#         self.Hz = s.T @ self.Gz
-#     def get_density(self,):
-#         # check의 max weight와, 각 qubit이 속한 check의 max 개수
-#         max_check_weight_x = max([np.sum(np.asarray(row)) for row in self.Hx])
-#         max_check_weight_z = max([np.sum(np.asarray(row)) for row in self.Hz])
-#         max_qubit_degree_x = max([np.sum(np.asarray(self.Hx[:,i])) for i in range(self.n)])
-#         max_qubit_degree_z = max([np.sum(np.asarray(self.Hz[:,i])) for i in range(self.n)])
-#         print("Max check weight X:", max_check_weight_x)
-#         print("Max check weight Z:", max_check_weight_z)
-#         print("Max qubit degree X:", max_qubit_degree_x)
-#         print("Max qubit degree Z:", max_qubit_degree_z)
-#         return max(max_check_weight_x, max_check_weight_z), max(max_qubit_degree_x, max_qubit_degree_z)
-#     def calculate_k(self,):
-#         rank_x = np.linalg.matrix_rank(self.Hx)
-#         rank_z = np.linalg.matrix_rank(self.Hz)
-#         self.k = int(self.n - (rank_x + rank_z))
-#         return int(self.n - (rank_x + rank_z))
+    def get_center(self,):
+        s = (self.Gz @ self.Gx.T).null_space()
+        self.Hx = s.T @ self.Gx
+        s = (self.Gx @ self.Gz.T).null_space()
+        self.Hz = s.T @ self.Gz
+    def get_density(self,):
+        # check의 max weight와, 각 qubit이 속한 check의 max 개수
+        max_check_weight_x = max([np.sum(np.asarray(row)) for row in self.Hx])
+        max_check_weight_z = max([np.sum(np.asarray(row)) for row in self.Hz])
+        max_qubit_degree_x = max([np.sum(np.asarray(self.Hx[:,i])) for i in range(self.n)])
+        max_qubit_degree_z = max([np.sum(np.asarray(self.Hz[:,i])) for i in range(self.n)])
+        print("Max check weight X:", max_check_weight_x)
+        print("Max check weight Z:", max_check_weight_z)
+        print("Max qubit degree X:", max_qubit_degree_x)
+        print("Max qubit degree Z:", max_qubit_degree_z)
+        return max(max_check_weight_x, max_check_weight_z), max(max_qubit_degree_x, max_qubit_degree_z)
+    def calculate_k(self,):
+        rank_x = np.linalg.matrix_rank(self.Hx)
+        rank_z = np.linalg.matrix_rank(self.Hz)
+        self.k = int(self.n - (rank_x + rank_z))
+        return int(self.n - (rank_x + rank_z))
 
-#     def _extract_quotient_basis(self, G_opp, G_self):
-#         """
-#         Ker(G_opp) / Rowspace(G_self) 의 기저를 추출하는 헬퍼 함수
-#         """
-#         # G_opp와 commute하는 space의 basis
-#         ker_opp = G_opp.null_space()
-#         # print("ker rank:",np.linalg.matrix_rank(ker_opp))
-#         # basis of G_self
-#         basis_self = G_self.row_space()
-#         # print("rank:",np.linalg.matrix_rank(basis_self))
-#         logicals = []
-#         current_span = basis_self
-#         # ker 원소 중 Gauge 기저와 독립적인 것들만 선별 (Stacking Trick)
-#         for vec in ker_opp:
-#             # 현재까지의 span(Gauge + 찾은 Logicals)에 새로운 벡터를 추가해봄
-#             if len(current_span) == 0:
-#                 test_matrix = vec.reshape(1, -1)
-#             else:
-#                 test_matrix = np.vstack([current_span, vec])
+    def _extract_quotient_basis(self, G_opp, G_self):
+        """
+        Ker(G_opp) / Rowspace(G_self) 의 기저를 추출하는 헬퍼 함수
+        """
+        # G_opp와 commute하는 space의 basis
+        ker_opp = G_opp.null_space()
+        # print("ker rank:",np.linalg.matrix_rank(ker_opp))
+        # basis of G_self
+        basis_self = G_self.row_space()
+        # print("rank:",np.linalg.matrix_rank(basis_self))
+        logicals = []
+        current_span = basis_self
+        # ker 원소 중 Gauge 기저와 독립적인 것들만 선별 (Stacking Trick)
+        for vec in ker_opp:
+            # 현재까지의 span(Gauge + 찾은 Logicals)에 새로운 벡터를 추가해봄
+            if len(current_span) == 0:
+                test_matrix = vec.reshape(1, -1)
+            else:
+                test_matrix = np.vstack([current_span, vec])
 
-#             # 랭크가 증가한다면 새로운 Logical 기저임
-#             if np.linalg.matrix_rank(test_matrix) > np.linalg.matrix_rank(current_span):
-#                 logicals.append(vec)
-#                 current_span = self.F(test_matrix)
+            # 랭크가 증가한다면 새로운 Logical 기저임
+            if np.linalg.matrix_rank(test_matrix) > np.linalg.matrix_rank(current_span):
+                logicals.append(vec)
+                current_span = self.F(test_matrix)
 
-#         return self.F(logicals) if logicals else self.F.Zeros((0, self.n))
+        return self.F(logicals) if logicals else self.F.Zeros((0, self.n))
     
-#     def commutativity_check(self,):
-#         # Hx @ Hz^T == 0 이어야 함.
-#         if not np.all(np.dot(self.Hx, self.Hz.T) == 0):
-#             return False
-#         else:
-#             return True
+    def commutativity_check(self,):
+        # Hx @ Hz^T == 0 이어야 함.
+        if not np.all(np.dot(self.Hx, self.Hz.T) == 0):
+            return False
+        else:
+            return True
 
-#     def set_logical_representative(self, type: str, idx: int, repr_vec: list[int]):
-#         repr_vec = self.F(repr_vec)
-#         if type == "X":
-#             # repr_vec가 Gz와 commute하는지, Gx의 row space에 없는지 확인
-#             assert np.all(np.dot(repr_vec, self.Gz.T) == 0), "Logical representative should commute with all Z-checks."
-#             assert np.linalg.matrix_rank(self.F(np.vstack((self.Gx, repr_vec)))) > np.linalg.matrix_rank(self.F(self.Gx)), "Logical representative should not be in the row space of Gx."
-#             # Z-logic representatives와의 anti-commute, commute 조건 체크 (None이 아닌 것들에 한해서)
-#             for j in range(self.k):
-#                 if self.logical_z_repr[j] is not None:
-#                     comm = np.dot(repr_vec, self.logical_z_repr[j])
-#                     if idx == j:
-#                         assert comm == 1, f"Logical X_{idx} and Z_{j} should anti-commute."
-#                     else:
-#                         assert comm == 0, f"Logical X_{idx} and Z_{j} should commute."
-#             self.logical_x_repr[idx] = repr_vec
-#         elif type == "Z":
-#             # repr_vec가 Gx와 commute하는지, Gz의 row space에 없는지 확인
-#             assert np.all(np.dot(repr_vec, self.Gx.T) == 0), "Logical representative should commute with all X-checks."
-#             assert np.linalg.matrix_rank(self.F(np.vstack((self.Gz, repr_vec)))) > np.linalg.matrix_rank(self.F(self.Gz)), "Logical representative should not be in the row space of Gz."
-#             # X-logic representatives와의 anti-commute, commute 조건 체크 (None이 아닌 것들에 한해서)
-#             for j in range(self.k):
-#                 if self.logical_x_repr[j] is not None:
-#                     comm = np.dot(repr_vec, self.logical_x_repr[j])
-#                     if idx == j:
-#                         assert comm == 1, f"Logical Z_{idx} and X_{j} should anti-commute."
-#                     else:
-#                         assert comm == 0, f"Logical Z_{idx} and X_{j} should commute."
-#             self.logical_z_repr[idx] = repr_vec
-#         else:
-#             raise ValueError("Invalid logical operator type. Expected 'X' or 'Z'.")
+    def set_logical_representative(self, type: str, idx: int, repr_vec: list[int]):
+        repr_vec = self.F(repr_vec)
+        if type == "X":
+            # repr_vec가 Gz와 commute하는지, Gx의 row space에 없는지 확인
+            assert np.all(np.dot(repr_vec, self.Gz.T) == 0), "Logical representative should commute with all Z-checks."
+            assert np.linalg.matrix_rank(self.F(np.vstack((self.Gx, repr_vec)))) > np.linalg.matrix_rank(self.F(self.Gx)), "Logical representative should not be in the row space of Gx."
+            # Z-logic representatives와의 anti-commute, commute 조건 체크 (None이 아닌 것들에 한해서)
+            for j in range(self.k):
+                if self.logical_z_repr[j] is not None:
+                    comm = np.dot(repr_vec, self.logical_z_repr[j])
+                    if idx == j:
+                        assert comm == 1, f"Logical X_{idx} and Z_{j} should anti-commute."
+                    else:
+                        assert comm == 0, f"Logical X_{idx} and Z_{j} should commute."
+            self.logical_x_repr[idx] = repr_vec
+        elif type == "Z":
+            # repr_vec가 Gx와 commute하는지, Gz의 row space에 없는지 확인
+            assert np.all(np.dot(repr_vec, self.Gx.T) == 0), "Logical representative should commute with all X-checks."
+            assert np.linalg.matrix_rank(self.F(np.vstack((self.Gz, repr_vec)))) > np.linalg.matrix_rank(self.F(self.Gz)), "Logical representative should not be in the row space of Gz."
+            # X-logic representatives와의 anti-commute, commute 조건 체크 (None이 아닌 것들에 한해서)
+            for j in range(self.k):
+                if self.logical_x_repr[j] is not None:
+                    comm = np.dot(repr_vec, self.logical_x_repr[j])
+                    if idx == j:
+                        assert comm == 1, f"Logical Z_{idx} and X_{j} should anti-commute."
+                    else:
+                        assert comm == 0, f"Logical Z_{idx} and X_{j} should commute."
+            self.logical_z_repr[idx] = repr_vec
+        else:
+            raise ValueError("Invalid logical operator type. Expected 'X' or 'Z'.")
     
-#     def is_complete_logical_set(self,):
-#         # logical representatives가 모두 채워져 있는지 확인
-#         for i in range(self.k):
-#             if self.logical_x_repr[i] is None or self.logical_z_repr[i] is None:
-#                 return False
-#         return True
+    def is_complete_logical_set(self,):
+        # logical representatives가 모두 채워져 있는지 확인
+        for i in range(self.k):
+            if self.logical_x_repr[i] is None or self.logical_z_repr[i] is None:
+                return False
+        return True
 
-#     def set_missing_logicals(self,):
-#         # logical representatives 중에서 None인 것들 찾아서 채워넣음.
-#         # dual logical operator가 None이 아닌 것 우선으로!
-#         for i in range(self.k):
-#             # dual이 None이 아닌 경우 우선 처리
-#             if self.logical_x_repr[i] is None and self.logical_z_repr[i] is not None:
-#                 self._set_missing_logical("X", i)
-#             if self.logical_z_repr[i] is None and self.logical_x_repr[i] is not None:
-#                 self._set_missing_logical("Z", i)
-#         # dual도 None인 경우 처리
-#         for i in range(self.k):
-#             if self.logical_x_repr[i] is None:
-#                 self._set_missing_logical("X", i)
-#             if self.logical_z_repr[i] is None:
-#                 self._set_missing_logical("Z", i)
+    def set_missing_logicals(self,):
+        # logical representatives 중에서 None인 것들 찾아서 채워넣음.
+        # dual logical operator가 None이 아닌 것 우선으로!
+        for i in range(self.k):
+            # dual이 None이 아닌 경우 우선 처리
+            if self.logical_x_repr[i] is None and self.logical_z_repr[i] is not None:
+                self._set_missing_logical("X", i)
+            if self.logical_z_repr[i] is None and self.logical_x_repr[i] is not None:
+                self._set_missing_logical("Z", i)
+        # dual도 None인 경우 처리
+        for i in range(self.k):
+            if self.logical_x_repr[i] is None:
+                self._set_missing_logical("X", i)
+            if self.logical_z_repr[i] is None:
+                self._set_missing_logical("Z", i)
 
-#     def _set_missing_logical(self, typ:str, idx:int):
-#         # dual logical operator가 None이라면 dual check와 commute하고 primal check의 span에 안들어가는 것 찾음.
-#         # print(f"set logical {typ} {idx}")
-#         if typ == "X":
-#             G_opp = self.Gz
-#             G_self = self.Gx
-#             primal_logic_ops = self.logical_x_repr
-#             dual_logic_ops = self.logical_z_repr    # 적어도 하나의 Z-logic op과 anti-commute해야 non-trivial logical op.임.
-#         elif typ == "Z":
-#             G_opp = self.Gx
-#             G_self = self.Gz
-#             primal_logic_ops = self.logical_z_repr
-#             dual_logic_ops = self.logical_x_repr
-#         A = G_opp
-#         b = self.F.Zeros((G_opp.shape[0],), dtype=int)
-#         # for primal_op in primal_logic_ops:    # 제약조건 있어야할 이유 없음.
-#         #     if primal_op is not None:
-#         #         A = np.vstack((A, primal_op))
-#         #         b = np.hstack((b, self.F(0)))
-#         for i, dual_op in enumerate(dual_logic_ops):
-#             if dual_op is not None:
-#                 A = np.vstack((A, dual_op))
-#                 if i == idx:
-#                     b = np.hstack((b, self.F(1)))
-#                 else:
-#                     b = np.hstack((b, self.F(0)))
+    def _set_missing_logical(self, typ:str, idx:int):
+        # dual logical operator가 None이라면 dual check와 commute하고 primal check의 span에 안들어가는 것 찾음.
+        # print(f"set logical {typ} {idx}")
+        if typ == "X":
+            G_opp = self.Gz
+            G_self = self.Gx
+            primal_logic_ops = self.logical_x_repr
+            dual_logic_ops = self.logical_z_repr    # 적어도 하나의 Z-logic op과 anti-commute해야 non-trivial logical op.임.
+        elif typ == "Z":
+            G_opp = self.Gx
+            G_self = self.Gz
+            primal_logic_ops = self.logical_z_repr
+            dual_logic_ops = self.logical_x_repr
+        A = G_opp
+        b = self.F.Zeros((G_opp.shape[0],), dtype=int)
+        for primal_op in primal_logic_ops:
+            if primal_op is not None:
+                A = np.vstack((A, primal_op))
+                b = np.hstack((b, self.F(0)))
+        for i, dual_op in enumerate(dual_logic_ops):
+            if dual_op is not None:
+                A = np.vstack((A, dual_op))
+                if i == idx:
+                    b = np.hstack((b, self.F(1)))
+                else:
+                    b = np.hstack((b, self.F(0)))
         
-#         # Ax=b 의 nullspace의 basis중에 G_self의 row space에 없는 것 찾기 (반드시 존재함)
-#         x_part, x_null = solve_gf2(A, b)
-#         # print("x_part: ", x_part)
-#         # print("x_null: ", x_null)
-#         # x_part는 row vector
-#         # x_null의 행이 해
-#         for row in x_null:
-#             x = x_part + row
-#             # G_self의 row space에 없는지 확인
-#             if np.linalg.matrix_rank(self.F(np.vstack((G_self, x)))) == np.linalg.matrix_rank(self.F(G_self)) + 1:
-#                 # print("Found missing logical operator:", x)
-#                 if typ == "X":
-#                     self.logical_x_repr[idx] = self.F(x)
-#                 elif typ == "Z":
-#                     self.logical_z_repr[idx] = self.F(x)
-#                 return
+        # Ax=b 의 nullspace의 basis중에 G_self의 row space에 없는 것 찾기 (반드시 존재함)
+        x_part, x_null = solve_gf2(A, b)
+        # print("x_part: ", x_part)
+        # print("x_null: ", x_null)
+        # x_part는 row vector
+        # x_null의 행이 해
+        for row in x_null:
+            x = x_part + row
+            # G_self의 row space에 없는지 확인
+            if np.linalg.matrix_rank(self.F(np.vstack((G_self, x)))) == np.linalg.matrix_rank(self.F(G_self)) + 1:
+                # print("Found missing logical operator:", x)
+                if typ == "X":
+                    self.logical_x_repr[idx] = self.F(x)
+                elif typ == "Z":
+                    self.logical_z_repr[idx] = self.F(x)
+                return
             
 
 
-#     def set_logical_representatives(self, logical_x_repr: list[list], logical_z_repr: list[list]):
+    def set_logical_representatives(self, logical_x_repr: list[list], logical_z_repr: list[list]):
         
 
-#         assert len(logical_x_repr) == self.k, "Number of logical X representatives must be equal to k."
-#         assert len(logical_z_repr) == self.k, "Number of logical Z representatives must be equal to k."
-#         self.logical_x_repr = [self.F(op) for op in logical_x_repr]
-#         self.logical_z_repr = [self.F(op) for op in logical_z_repr]
-#         # check 만족하는지 확인
-#         for i in range(self.k):
-#             assert np.all(np.dot(self.logical_x_repr[i], self.Gz.T) == 0), f"Logical X_{i} should commute with all Z-checks."
-#             assert np.all(np.dot(self.logical_z_repr[i], self.Gx.T) == 0), f"Logical Z_{i} should commute with all X-checks."
+        assert len(logical_x_repr) == self.k, "Number of logical X representatives must be equal to k."
+        assert len(logical_z_repr) == self.k, "Number of logical Z representatives must be equal to k."
+        self.logical_x_repr = [self.F(op) for op in logical_x_repr]
+        self.logical_z_repr = [self.F(op) for op in logical_z_repr]
+        # check 만족하는지 확인
+        for i in range(self.k):
+            assert np.all(np.dot(self.logical_x_repr[i], self.Gz.T) == 0), f"Logical X_{i} should commute with all Z-checks."
+            assert np.all(np.dot(self.logical_z_repr[i], self.Gx.T) == 0), f"Logical Z_{i} should commute with all X-checks."
         
-#         # logic op간 anti-commute, commute 조건 체크
-#         for i in range(self.k):
-#             for j in range(self.k):
-#                 comm = np.dot(self.logical_x_repr[i], self.logical_z_repr[j])
-#                 if i == j:
-#                     assert comm == 1, f"Logical X_{i} and Z_{j} should anti-commute."
-#                 else:
-#                     assert comm == 0, f"Logical X_{i} and Z_{j} should commute."
+        # logic op간 anti-commute, commute 조건 체크
+        for i in range(self.k):
+            for j in range(self.k):
+                comm = np.dot(self.logical_x_repr[i], self.logical_z_repr[j])
+                if i == j:
+                    assert comm == 1, f"Logical X_{i} and Z_{j} should anti-commute."
+                else:
+                    assert comm == 0, f"Logical X_{i} and Z_{j} should commute."
 
-#     def calc_logical_representatives(self,):
-#         # logical X, Z commutation relation 만족하지 않을 수 있음
-#         # distance 계산에만 유효
-#         if self.logical_x_repr is None:
-#             # Lx = Ker(Gz) / Rowspace(Gx)
-#             self.logical_x_repr = self._extract_quotient_basis(self.Gz, self.Gx)
-#         if self.logical_z_repr is None:
-#             # Lz = Ker(Gx) / Rowspace(Gz)
-#             self.logical_z_repr = self._extract_quotient_basis(self.Gx, self.Gz)
+    def calc_logical_representatives(self,):
+        # logical X, Z commutation relation 만족하지 않을 수 있음
+        # distance 계산에만 유효
+        if self.logical_x_repr is None:
+            # Lx = Ker(Gz) / Rowspace(Gx)
+            self.logical_x_repr = self._extract_quotient_basis(self.Gz, self.Gx)
+        if self.logical_z_repr is None:
+            # Lz = Ker(Gx) / Rowspace(Gz)
+            self.logical_z_repr = self._extract_quotient_basis(self.Gx, self.Gz)
     
     
-#     def _minimize_logical_op(self, l_type, support: galois.FieldArray):
-#         # l_type, support를 가지는 logical operator를 같은 type check곱해서 weight 최소화
-#         if l_type == "X":
-#             G_self = self.Gx
-#         elif l_type == "Z":
-#             G_self = self.Gz
-        
-#         G = np.array(G_self, dtype=int)
-#         s = np.array(support, dtype=int)
-#         m, n = G.shape  # m: stabilizer 수, n: 큐비트 수
-
-#         model = Model(name="minimize_logical_op")
-
-#         # 변수
-#         r = model.binary_var_list(m, name="r")   # 어떤 stabilizer를 XOR할지
-#         y = model.binary_var_list(n, name="y")   # 결과 비트
-#         z = model.integer_var_list(n, lb=0, name="z")  # mod 2 slack
-
-#         # 제약: y[j] ≡ s[j] + sum_i G[i,j]*r[i]  (mod 2)
-#         for j in range(n):
-#             lhs = s[j] + model.sum(int(G[i, j]) * r[i] for i in range(m))
-#             model.add_constraint(lhs == y[j] + 2 * z[j])
-
-#         # 목적함수
-#         model.minimize(model.sum(y))
-
-#         sol = model.solve()
-#         print(sol.solve_details.status)
-#         if sol:
-#             result = np.array([int(sol.get_value(y[j])) for j in range(n)])
-#             return galois.GF(2)(result)
-#         else:
-#             return None
-
-
-
-#     def _find_min_op_weight(self, l_type):
-#         # l_type의 모든 logical operator 중 (up to multiplication with checks) 최소 weight
-#         if l_type == "X":
-#             G_opp = self.Gz
-#             G_self = self.Gx
-#             anti_logic_ops = self.logical_z_repr    # 적어도 하나의 Z-logic op과 anti-commute해야 non-trivial logical op.임.
-#         elif l_type == "Z":
-#             G_opp = self.Gx
-#             G_self = self.Gz
-#             anti_logic_ops = self.logical_x_repr
-
-#         model = Model(name="css_distance")
-#         e = model.binary_var_list(self.n, name='e')
-#         s = model.binary_var_list(self.k, name='s') # s_i: Z_i와 anti-commute하는지
-#         c = model.binary_var_list(self.n, name='c')
-
-#         z_comm = [model.integer_var(lb=0, ub=int(np.sum(np.asarray(G_opp[j])) // 2), name=f'z_comm_{j}') for j in range(G_opp.shape[0])]
-#         z_coset = [model.integer_var(lb=0, ub=int(np.sum(np.asarray(anti_logic_ops[j])) // 2), name=f'z_coset_{j}') for j in range(self.k)]
-#         model.minimize(model.sum(e))
-
-#         # Commute with G_opp
-#         # G_opp @ e = 0 (mod 2)
-#         for j in range(G_opp.shape[0]):
-#             model.add_constraint(model.sum(int(G_opp[j][i])*e[i] for i in range(self.n)) == 2*z_comm[j])
-
-#         # Logical syndrome (anti_logic_ops[j]랑 anti-commute하는지?)
-#         for j in range(self.k):
-#             lhs = model.sum(int(anti_logic_ops[j][i])*e[i] for i in range(self.n))
-#             model.add_constraint(lhs == 2*z_coset[j] + s[j])
-
-#         # Non-triviality:
-#         model.add_constraint(model.sum(s)>=1)
-#         sol = model.solve(log_output=False)
-#         status = model.solve_status
-#         # print(f"statue: {status}")
-#         solve_time = sol.solve_details.time
-#         # print(f"⏱️ CPLEX 순수 계산 시간: {solve_time:.4f} 초")
-#         # print(sol.get_values(e))
-
-#         if sol:
-#             return int(sol.objective_value)
-#         else:
-#             return None
-
-
-
-#     def calculate_distance(self,):
-#         self.calc_logical_representatives()
-#         self.calculate_k()
-#         # print(self.logical_x_repr)
-#         # print(self.logical_z_repr)
-#         self.dx = self._find_min_op_weight("X")
-#         self.dz = self._find_min_op_weight("Z")
-#         self.d = min(self.dx,self.dz)
-#         return self.d
-
-#     def get_distance(self,):
-#         if self.dx is None or self.dz is None:
-#             self.calculate_distance()
-#         return self.dx, self.dz
-
-
-import numpy as np
-import galois
-from docplex.mp.model import Model
-
-
-import numpy as np
-import galois
-from docplex.mp.model import Model
-
-
-class GaugeCSS:
-    """
-    Subsystem (gauge) CSS code.
-
-        Gx, Gz : gauge generator.  서로 commute 하지 않아도 된다.
-        Hx, Hz : stabilizer = gauge group 의 center.
-        n = k + g + rank(Hx) + rank(Hz)
-
-    logical operator 가 두 종류다.
-
-        bare    : gauge group 전체와 commute.
-                  X: ker(Gz)/rowspace(Hx),  Z: ker(Gx)/rowspace(Hz),  각각 차원 k
-        dressed : stabilizer 하고만 commute. bare 에 gauge 를 곱한 것도 포함.
-                  X: ker(Hz)/rowspace(Gx),  Z: ker(Hx)/rowspace(Gz)
-
-    bare 는 s[j] (logical 작용 계기판) 정의에 쓴다. e 를 gauge 만큼 흔들어도
-    <bare_z[j], e> 가 안 변해야 하기 때문. dressed 는 ILP 의 탐색 범위이자 결과다.
-
-    distance 는 dressed 기준 (bare=True 로 bare distance 도 볼 수 있음).
-
-    Attributes
-    ----------
-    bare_x_repr, bare_z_repr : list[FieldArray], 길이 k.  pairing = I 로 정규화됨.
-    dressed_x_repr, dressed_z_repr : list[np.ndarray|None], 길이 k.
-        logical_qubit_distances() 가 채운다. dx_i / dz_i 를 달성하는 최소 weight 연산자.
-        gauge 와 anti-commute 할 수 있으므로 bare_*_repr 을 이걸로 덮어쓰면 안 된다.
-    dx_i, dz_i : list[int|None], 길이 k.  logical qubit 별 distance.
-    dx, dz, d  : 코드 전체 distance.
-    """
-
-    def __init__(self, Gx, Gz):
-        self.F = galois.GF(2)
-        self.Gx = self.F(np.asarray(Gx, dtype=int) % 2)
-        self.Gz = self.F(np.asarray(Gz, dtype=int) % 2)
-        assert self.Gx.shape[1] == self.Gz.shape[1], "Gx, Gz 의 열 개수가 달라"
-        self.n = int(self.Gx.shape[1])
-
-        self._compute_center()
-        self._compute_k_g()
-
-        self.bare_x_repr = [None] * self.k
-        self.bare_z_repr = [None] * self.k
-        self.dressed_x_repr = [None] * self.k
-        self.dressed_z_repr = [None] * self.k
-        self.dx_i = [None] * self.k
-        self.dz_i = [None] * self.k
-        self.dx = self.dz = self.d = None
-        self._bare_minimized = False
-        self._dressed_done = False
-
-    # -- 기본 helper ---------------------------------------------------------
-    def _rank(self, M) -> int:
-        M = np.asarray(M, dtype=int) % 2
-        if M.size == 0 or M.shape[0] == 0:
-            return 0
-        return int(np.linalg.matrix_rank(self.F(M)))
-
-    def _rows(self, M) -> np.ndarray:
-        return np.asarray(M, dtype=int) % 2
-
-    # -- center --------------------------------------------------------------
-    def _compute_center(self):
-        """
-        Hx = Gx 의 row 조합 중 Gz 전부와 commute 하는 것.
-        (Gz @ Gx.T) 의 null space 가 그 조합 계수. null_space() 는 행이 basis 이므로
-        s @ Gx 가 맞다 (s.T @ Gx 는 Gz @ Gx.T == 0 일 때만 우연히 통한다).
-        """
-        s = (self.Gz @ self.Gx.T).null_space()
-        self.Hx = s @ self.Gx if s.shape[0] else self.F.Zeros((0, self.n))
-        s = (self.Gx @ self.Gz.T).null_space()
-        self.Hz = s @ self.Gz if s.shape[0] else self.F.Zeros((0, self.n))
-
-    def _compute_k_g(self):
-        rGx, rGz = self._rank(self.Gx), self._rank(self.Gz)
-        rHx, rHz = self._rank(self.Hx), self._rank(self.Hz)
-        self.g = rGx - rHx
-        assert self.g == rGz - rHz, \
-            f"gauge qubit 수가 X/Z 에서 안 맞음: {rGx - rHx} vs {rGz - rHz}"
-        self.k = self.n - rHx - rHz - self.g
-        assert self.k >= 0, f"k = {self.k} < 0"
-        self._rank_cache = dict(Gx=rGx, Gz=rGz, Hx=rHx, Hz=rHz)
-
-    def commutativity_check(self) -> bool:
-        """stabilizer 끼리는 반드시 commute 해야 한다 (gauge 는 아니어도 됨)."""
-        return not np.any(self.Hx @ self.Hz.T)
-
-    # -- bare / dressed logical ---------------------------------------------
-    def _quotient_basis(self, G_opp, G_self):
-        """ker(G_opp) / rowspace(G_self) 의 기저. weight 는 신경쓰지 않는다."""
-        ker = G_opp.null_space() if G_opp.shape[0] else self.F.Identity(self.n)
-        span = G_self.row_space() if G_self.shape[0] else self.F.Zeros((0, self.n))
-        out = []
-        cur = np.asarray(span, dtype=int)
-        r_cur = self._rank(cur)
-        for vec in ker:
-            v = np.asarray(vec, dtype=int)
-            test = np.vstack([cur, v]) if cur.shape[0] else v.reshape(1, -1)
-            r_test = self._rank(test)
-            if r_test > r_cur:
-                out.append(v)
-                cur, r_cur = test, r_test
-        return np.array(out, dtype=int).reshape(len(out), self.n)
-
-    def _build_pick_ilp(self, l_type, orth, anti=None, ref=None):
-        """
-        min |e|  s.t.
-          e 가 gauge 전부와 commute        (bare 니까 Gz / Gx 를 쓴다)
-          orth 안의 벡터들과 겹침 짝수
-          anti 와 겹침 홀수                 (anti 가 있으면)
-          ref 중 적어도 하나와 겹침 홀수    (ref 가 있으면. stabilizer 가 아님을 보장)
-        """
-        G_opp = self._rows(self.Gz if l_type == "X" else self.Gx)
-        model = Model(name=f"pick_{l_type}")
-        e = model.binary_var_list(self.n, name="e")
-
-        def parity(vec, rhs):
-            vec = np.asarray(vec, dtype=int) % 2
-            q = model.integer_var(lb=0, ub=max(int(vec.sum()) // 2, 0))
-            lhs = model.sum(int(vec[i]) * e[i] for i in range(self.n))
-            model.add_constraint(lhs == 2 * q + rhs)
-
-        for j in range(G_opp.shape[0]):
-            parity(G_opp[j], 0)
-        for v in orth:
-            parity(v, 0)
-        if anti is not None:
-            parity(anti, 1)
-        if ref is not None and len(ref):
-            s = model.binary_var_list(len(ref), name="s")
-            for m, r in enumerate(ref):
-                parity(r, s[m])
-            model.add_constraint(model.sum(s) >= 1)
-
-        model.minimize(model.sum(e))
-        return model, e
-
-    def _solve_pick(self, l_type, orth, anti=None, ref=None):
-        model, e = self._build_pick_ilp(l_type, orth, anti, ref)
-        sol = model.solve(log_output=False)
-        assert sol is not None, f"pick {l_type} 실패"
-        return np.array([int(round(sol.get_value(v))) for v in e], dtype=int)
-
-    def _minimize_coset(self, v, G):
-        """v + rowspace(G) 안에서 최소 weight 인 원소."""
-        G = self._rows(G)
-        v = np.asarray(v, dtype=int) % 2
-        if G.shape[0] == 0:
-            return v
-        m = G.shape[0]
-        model = Model(name="min_coset")
-        r = model.binary_var_list(m, name="r")
-        y = model.binary_var_list(self.n, name="y")
-        for j in range(self.n):
-            q = model.integer_var(lb=0, ub=m)
-            model.add_constraint(
-                int(v[j]) + model.sum(int(G[i, j]) * r[i] for i in range(m))
-                == y[j] + 2 * q)
-        model.minimize(model.sum(y))
-        sol = model.solve(log_output=False)
-        assert sol is not None, "coset 최소화 실패"
-        return np.array([int(round(sol.get_value(t))) for t in y], dtype=int)
-
-    def set_bare_logical(self, l_type, idx, vec):
-        """
-        bare logical 한 칸만 지정. 조건을 못 맞추면 assert 로 걸린다.
-          gauge 전부와 겹침 짝수 / stabilizer 가 아님 /
-          같은 번호의 반대 타입과 홀수, 다른 번호와는 짝수
-        """
-        assert 0 <= idx < self.k, f"idx={idx} 는 [0,{self.k}) 범위여야 함"
-        assert l_type in ("X", "Z")
-        v = np.asarray(vec, dtype=int) % 2
-        G_opp = self._rows(self.Gz if l_type == "X" else self.Gx)
-        H_self = self._rows(self.Hx if l_type == "X" else self.Hz)
-        assert not (G_opp @ v % 2).any(), f"{l_type}_{idx} 가 gauge 와 겹침이 홀수"
-        assert self._rank(np.vstack([H_self, v])) > self._rank(H_self), \
-            f"{l_type}_{idx} 가 stabilizer 임"
-        dual = self.bare_z_repr if l_type == "X" else self.bare_x_repr
-        for j, d in enumerate(dual):
-            if d is None:
-                continue
-            want = 1 if j == idx else 0
-            got = int(np.dot(v, self._rows(d)) % 2)
-            assert got == want, f"{l_type}_{idx} 와 반대타입 {j} 의 겹침이 {got}, {want} 여야 함"
-        (self.bare_x_repr if l_type == "X" else self.bare_z_repr)[idx] = self.F(v)
-        self._bare_minimized = False
-        self._dressed_done = False
-        return self
-
-    def set_bare_logicals(self, lx, lz):
-        """k 개씩 한꺼번에 지정. None 을 섞어서 일부만 줘도 된다."""
-        assert len(lx) == len(lz) == self.k, f"k={self.k} 개씩 줘야 함"
-        self.bare_x_repr = [None] * self.k
-        self.bare_z_repr = [None] * self.k
-        for i, v in enumerate(lz):          # Z 를 먼저 넣어야 X 검사가 의미 있음
-            if v is not None:
-                self.set_bare_logical("Z", i, v)
-        for i, v in enumerate(lx):
-            if v is not None:
-                self.set_bare_logical("X", i, v)
-        return self
-
-    def is_complete(self) -> bool:
-        return not (any(v is None for v in self.bare_x_repr)
-                    or any(v is None for v in self.bare_z_repr))
-
-    def _fill_missing(self):
-        """
-        빈 칸을 최소 weight 로 채운다. 이미 찬 칸은 안 건드린다.
-
-        X_i 를 채울 때 거는 조건:
-          gauge 전부와 겹침 짝수
-          이미 정해진 Z_j (j != i) 와 겹침 짝수   <- 그 짝인 X_j 를 베끼는 것이 배제됨
-          Z_i 가 이미 있으면 그것과 겹침 홀수
-          Z_i 가 없으면 ref 중 적어도 하나와 홀수  <- stabilizer 가 아님을 보장
-
-        순서가 중요하다. 짝이 한쪽만 있는 자리를 먼저 채워서, 이후 X 를 채울 때
-        이미 정해진 모든 X 에 짝 Z 가 있도록 만든다. 그래야 베끼는 것이 막힌다.
-        ref 는 처음에 한 번만 만들면 된다.
-        """
-        cache = {}
-
-        def ref_of(l_type):
-            if l_type not in cache:
-                cache[l_type] = (self._quotient_basis(self.Gx, self.Hz) if l_type == "X"
-                                 else self._quotient_basis(self.Gz, self.Hx))
-            return cache[l_type]
-
-        def fill(l_type, idx):
-            dual = self.bare_z_repr if l_type == "X" else self.bare_x_repr
-            orth = [self._rows(dual[j]) for j in range(self.k)
-                    if j != idx and dual[j] is not None]
-            anti = None if dual[idx] is None else self._rows(dual[idx])
-            ref = None if anti is not None else ref_of(l_type)
-            v = self._solve_pick(l_type, orth=orth, anti=anti, ref=ref)
-            (self.bare_x_repr if l_type == "X" else self.bare_z_repr)[idx] = self.F(v)
-
-        for i in range(self.k):                                   # 1단계: 한쪽만 빈 자리
-            if self.bare_x_repr[i] is None and self.bare_z_repr[i] is not None:
-                fill("X", i)
-            if self.bare_z_repr[i] is None and self.bare_x_repr[i] is not None:
-                fill("Z", i)
-        for i in range(self.k):                                   # 2단계: 양쪽 빈 자리
-            if self.bare_x_repr[i] is None:
-                fill("X", i)
-                fill("Z", i)
-        self._dressed_done = False
-        return self
-
-    def calc_bare_logicals(self):
-        """전부 지우고 처음부터 다시 뽑는다. ILP 2k 번."""
-        self.bare_x_repr = [None] * self.k
-        self.bare_z_repr = [None] * self.k
-        self._bare_minimized = False
-        return self._fill_missing()
-
-    def get_bare_logicals(self, minimize: bool = False):
-        """
-        빈 칸만 채워서 돌려준다. 이미 찬 칸은 건드리지 않는다.
-        minimize=True 면 stabilizer 를 곱해서 weight 도 줄인다. 겹침 홀짝은
-        stabilizer 를 곱해도 안 변하므로 짝 조건은 유지된다. 한 번만 돈다.
-        """
-        if not self.is_complete():
-            self._fill_missing()
-        if minimize and not self._bare_minimized:
-            self.bare_x_repr = [self.F(self._minimize_coset(v, self.Hx))
-                                for v in self.bare_x_repr]
-            self.bare_z_repr = [self.F(self._minimize_coset(v, self.Hz))
-                                for v in self.bare_z_repr]
-            self._bare_minimized = True
-            self._dressed_done = False
-        return self.bare_x_repr, self.bare_z_repr
-
-    def get_dressed_logicals(self):
-        """
-        bare 를 확정한 뒤 gauge 까지 곱해서 최소 weight 로 만든다.
-        bare_*_repr 은 건드리지 않는다.
-        """
-        self.get_bare_logicals()
-        if not self._dressed_done:
-            self.dressed_x_repr = [self._minimize_coset(v, self.Gx)
-                                   for v in self.bare_x_repr]
-            self.dressed_z_repr = [self._minimize_coset(v, self.Gz)
-                                   for v in self.bare_z_repr]
-            self._dressed_done = True
-        return self.dressed_x_repr, self.dressed_z_repr
-
-    # -- ILP -----------------------------------------------------------------
-    def _build_model(self, l_type: str, target=None, bare: bool = False):
-        """
-        min |e|  s.t.
-          (1) e 가 G_opp 전부와 commute        <- bare=False 면 stabilizer 만
-          (2) s[j] = <bare_dual[j], e> mod 2
-          (3) target=None 이면 sum(s) >= 1,  target=i 면 s[i] == 1
-
-        (1) 에서 stabilizer 만 쓰는 것이 dressed. gauge 는 곱해도 같은 logical 이므로
-        제약으로 걸면 안 된다. bare=True 면 gauge 까지 걸어서 bare distance 가 나온다.
-        """
-        self.get_bare_logicals()
+    def _minimize_logical_op(self, l_type, support: galois.FieldArray):
+        # l_type, support를 가지는 logical operator를 같은 type check곱해서 weight 최소화
         if l_type == "X":
-            G_opp = (self.Gz if bare else self.Hz)
-            dual = self.bare_z_repr
+            G_self = self.Gx
         elif l_type == "Z":
-            G_opp = (self.Gx if bare else self.Hx)
-            dual = self.bare_x_repr
+            G_self = self.Gz
+        
+        G = np.array(G_self, dtype=int)
+        s = np.array(support, dtype=int)
+        m, n = G.shape  # m: stabilizer 수, n: 큐비트 수
+
+        model = Model(name="minimize_logical_op")
+
+        # 변수
+        r = model.binary_var_list(m, name="r")   # 어떤 stabilizer를 XOR할지
+        y = model.binary_var_list(n, name="y")   # 결과 비트
+        z = model.integer_var_list(n, lb=0, name="z")  # mod 2 slack
+
+        # 제약: y[j] ≡ s[j] + sum_i G[i,j]*r[i]  (mod 2)
+        for j in range(n):
+            lhs = s[j] + model.sum(int(G[i, j]) * r[i] for i in range(m))
+            model.add_constraint(lhs == y[j] + 2 * z[j])
+
+        # 목적함수
+        model.minimize(model.sum(y))
+
+        sol = model.solve()
+        print(sol.solve_details.status)
+        if sol:
+            result = np.array([int(sol.get_value(y[j])) for j in range(n)])
+            return galois.GF(2)(result)
         else:
-            raise ValueError("l_type must be 'X' or 'Z'")
+            return None
 
-        G_opp = self._rows(G_opp)
-        dual = [self._rows(v) for v in dual]
 
-        model = Model(name=f"gauge_css_d{l_type}")
-        e = model.binary_var_list(self.n, name="e")
-        s = model.binary_var_list(self.k, name="s")
 
-        # (1) commute
+    def _find_min_op_weight(self, l_type, target=None):
+        # target=None: l_type의 모든 logical operator 중 (up to multiplication with checks) 최소 weight
+        # target=idx: logical qubit idx 에 nontrivial하게 작용하는 (다른 logical qubit을
+        #             같이 건드려도 되는) 연산자 중 최소 weight -> 그 logical qubit의 보호수준
+        if l_type == "X":
+            G_opp = self.Gz
+            G_self = self.Gx
+            anti_logic_ops = self.logical_z_repr    # 적어도 하나의 Z-logic op과 anti-commute해야 non-trivial logical op.임.
+        elif l_type == "Z":
+            G_opp = self.Gx
+            G_self = self.Gz
+            anti_logic_ops = self.logical_x_repr
+
+        assert anti_logic_ops is not None and all(v is not None for v in anti_logic_ops), (
+            f"logical_{'z' if l_type=='X' else 'x'}_repr 에 None 이 있음. "
+            "calc_logical_representatives() 또는 set_missing_logicals() 를 먼저 호출할 것.")
+
+        model = Model(name="css_distance")
+        e = model.binary_var_list(self.n, name='e')
+        s = model.binary_var_list(self.k, name='s') # s_i: Z_i와 anti-commute하는지
+        c = model.binary_var_list(self.n, name='c')
+
+        z_comm = [model.integer_var(lb=0, ub=int(np.sum(np.asarray(G_opp[j])) // 2), name=f'z_comm_{j}') for j in range(G_opp.shape[0])]
+        z_coset = [model.integer_var(lb=0, ub=int(np.sum(np.asarray(anti_logic_ops[j])) // 2), name=f'z_coset_{j}') for j in range(self.k)]
+        model.minimize(model.sum(e))
+
+        # Commute with G_opp
+        # G_opp @ e = 0 (mod 2)
         for j in range(G_opp.shape[0]):
-            ub = int(G_opp[j].sum()) // 2
-            q = model.integer_var(lb=0, ub=max(ub, 0), name=f"q_comm_{j}")
-            model.add_constraint(
-                model.sum(int(G_opp[j][i]) * e[i] for i in range(self.n)) == 2 * q)
+            model.add_constraint(model.sum(int(G_opp[j][i])*e[i] for i in range(self.n)) == 2*z_comm[j])
 
-        # (2) logical 계기판
+        # Logical syndrome (anti_logic_ops[j]랑 anti-commute하는지?)
         for j in range(self.k):
-            ub = int(dual[j].sum()) // 2
-            q = model.integer_var(lb=0, ub=max(ub, 0), name=f"q_log_{j}")
-            model.add_constraint(
-                model.sum(int(dual[j][i]) * e[i] for i in range(self.n))
-                == 2 * q + s[j])
+            lhs = model.sum(int(anti_logic_ops[j][i])*e[i] for i in range(self.n))
+            model.add_constraint(lhs == 2*z_coset[j] + s[j])
 
-        # (3) non-triviality
+        # Non-triviality:
         if target is None:
-            model.add_constraint(model.sum(s) >= 1)
+            model.add_constraint(model.sum(s)>=1)
         else:
             assert 0 <= target < self.k, f"target={target} 는 [0,{self.k}) 범위여야 함"
             model.add_constraint(s[target] == 1)
-
-        model.minimize(model.sum(e))
-        return model, e
-
-    def _solve_min_weight(self, l_type: str, target=None, bare: bool = False):
-        """(weight, e) 반환. 해가 없으면 (None, None)."""
-        model, e = self._build_model(l_type, target, bare)
         sol = model.solve(log_output=False)
-        if sol is None:
-            return None, None
-        vec = np.array([int(round(sol.get_value(v))) for v in e], dtype=int)
-        return int(round(sol.objective_value)), vec
+        status = model.solve_status
+        # print(f"statue: {status}")
+        solve_time = sol.solve_details.time
+        # print(f"⏱️ CPLEX 순수 계산 시간: {solve_time:.4f} 초")
+        # print(sol.get_values(e))
 
-    # -- public --------------------------------------------------------------
-    def get_distance(self, bare: bool = False):
-        """코드 전체 (dx, dz). 이미 구했으면 그걸 돌려준다. 없으면 ILP 2 번."""
-        if not bare and self.dx is not None and self.dz is not None:
-            return self.dx, self.dz
-        dx, _ = self._solve_min_weight("X", None, bare)
-        dz, _ = self._solve_min_weight("Z", None, bare)
-        if not bare:
-            self.dx, self.dz = dx, dz
-            self.d = None if (dx is None or dz is None) else min(dx, dz)
-        return dx, dz
+        if sol:
+            return int(sol.objective_value)
+        else:
+            return None
 
-    def logical_qubit_distance(self, idx: int, bare: bool = False):
-        """logical qubit idx 의 (dx_i, dz_i). 최소 weight 연산자도 같이 저장."""
-        wx, ex = self._solve_min_weight("X", idx, bare)
-        wz, ez = self._solve_min_weight("Z", idx, bare)
-        if not bare:
-            self.dx_i[idx], self.dz_i[idx] = wx, wz
+
+
+    def calculate_distance(self,):
+        self.calc_logical_representatives()
+        self.calculate_k()
+        # print(self.logical_x_repr)
+        # print(self.logical_z_repr)
+        self.dx = self._find_min_op_weight("X")
+        self.dz = self._find_min_op_weight("Z")
+        self.d = min(self.dx,self.dz)
+        return self.d
+
+    def get_distance(self,):
+        if self.dx is None or self.dz is None:
+            self.calculate_distance()
+        return self.dx, self.dz
+
+    def logical_qubit_distance(self, idx: int):
+        """logical qubit idx 의 (dx_i, dz_i) 보호수준: idx 에 nontrivial하게 작용하는
+        (다른 logical qubit도 같이 건드려도 되는) 연산자 중 최소 weight."""
+        wx = self._find_min_op_weight("X", target=idx)
+        wz = self._find_min_op_weight("Z", target=idx)
+        self.dx_i[idx], self.dz_i[idx] = wx, wz
         return wx, wz
 
-    def logical_qubit_distances(self, bare: bool = False):
-        """모든 logical qubit 의 (dx_i, dz_i). ILP 2k 번. min 이 코드 distance."""
-        out = [self.logical_qubit_distance(i, bare) for i in range(self.k)]
-        if not bare and self.k and all(w is not None for p in out for w in p):
+    def logical_qubit_distances(self):
+        """모든 logical qubit 의 (dx_i, dz_i). ILP 2k 번. min 이 코드 전체 distance."""
+        out = [self.logical_qubit_distance(i) for i in range(self.k)]
+        if self.k and all(w is not None for p in out for w in p):
             self.dx = min(p[0] for p in out)
             self.dz = min(p[1] for p in out)
             self.d = min(self.dx, self.dz)
         return out
-
-    def report(self):
-        r = self._rank_cache
-        print("=" * 58)
-        print(f"GaugeCSS  [[n={self.n}, k={self.k}, g={self.g}]]")
-        print("=" * 58)
-        print(f"  rank Gx/Gz : {r['Gx']} / {r['Gz']}")
-        print(f"  rank Hx/Hz : {r['Hx']} / {r['Hz']}")
-        print(f"  stabilizer commute : {self.commutativity_check()}")
-        if self.dx is not None:
-            print(f"  dressed d  : dx={self.dx} dz={self.dz} d={self.d}")
-        if any(v is not None for v in self.dx_i):
-            print(f"  dx_i : {self.dx_i}")
-            print(f"  dz_i : {self.dz_i}")
-
-
-class CSS(GaugeCSS):
-    """
-    gauge 가 없는 CSS code. GaugeCSS 에서 g = 0 인 경우.
-
-    Hx = Gx, Hz = Gz 이므로
-      - center 를 계산할 필요가 없다 (null_space 두 번 생략)
-      - bare 와 dressed 가 같다
-
-    기존 이름들을 그대로 두었으므로 HGPCode / LPCode / BBCode /
-    RotatedSurfaceCode 및 surgery.py 는 고칠 것이 없다.
-    """
-
-    # -- g = 0 이라 단순해지는 부분 -------------------------------------------
-    def _compute_center(self):
-        self.Hx, self.Hz = self.Gx, self.Gz
-
-    def _compute_k_g(self):
-        assert not np.any(self.Gx @ self.Gz.T), \
-            "Gx 와 Gz 가 commute 하지 않는다. gauge code 라면 GaugeCSS 를 쓸 것"
-        self.g = 0
-        self.k = self.n - self._rank(self.Gx) - self._rank(self.Gz)
-        assert self.k >= 0, f"k = {self.k} < 0"
-
-    def get_dressed_logicals(self):
-        """g = 0 이라 bare 와 같다. ILP 를 돌리지 않는다."""
-        self.get_bare_logicals()
-        self.dressed_x_repr = list(self.bare_x_repr)
-        self.dressed_z_repr = list(self.bare_z_repr)
-        self._dressed_done = True
-        return self.dressed_x_repr, self.dressed_z_repr
-
-    # -- 기존 이름 -----------------------------------------------------------
-    @property
-    def logical_x_repr(self):
-        return self.bare_x_repr
-
-    @logical_x_repr.setter
-    def logical_x_repr(self, v):
-        self.bare_x_repr = v
-
-    @property
-    def logical_z_repr(self):
-        return self.bare_z_repr
-
-    @logical_z_repr.setter
-    def logical_z_repr(self, v):
-        self.bare_z_repr = v
-
-    def calculate_k(self):
-        return self.k
-
-    def is_complete_logical_set(self):
-        return self.is_complete()
-
-    def set_logical_representative(self, type, idx, repr_vec):
-        return self.set_bare_logical(type, idx, repr_vec)
-
-    def set_logical_representatives(self, logical_x_repr, logical_z_repr):
-        return self.set_bare_logicals(logical_x_repr, logical_z_repr)
-
-    def calc_logical_representatives(self):
-        self.get_bare_logicals()
-        return self
-
-    def set_missing_logicals(self):
-        self.get_bare_logicals()
-        return self
-
-    def _minimize_logical_op(self, l_type, support):
-        G = self.Gx if l_type == "X" else self.Gz
-        return self.F(self._minimize_coset(support, G))
-
-    def _find_min_op_weight(self, l_type):
-        return self._solve_min_weight(l_type)[0]
-
-    def calculate_distance(self):
-        self.get_distance()
-        return self.d
-
-    def get_density(self):
-        cw_x = max(int(np.sum(np.asarray(r))) for r in self.Hx)
-        cw_z = max(int(np.sum(np.asarray(r))) for r in self.Hz)
-        qd_x = max(int(np.sum(np.asarray(self.Hx[:, i]))) for i in range(self.n))
-        qd_z = max(int(np.sum(np.asarray(self.Hz[:, i]))) for i in range(self.n))
-        print("Max check weight X:", cw_x)
-        print("Max check weight Z:", cw_z)
-        print("Max qubit degree X:", qd_x)
-        print("Max qubit degree Z:", qd_z)
-        return max(cw_x, cw_z), max(qd_x, qd_z)
-
-
-
-
-
 
 def _v(x):
     return "".join(str(int(b)) for b in np.asarray(x, dtype=int))

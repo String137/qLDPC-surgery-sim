@@ -366,10 +366,37 @@ class HGPCodePatch(CodePatch):
     def data_qubits(self) -> list[Qubit]: return self._data_qubits
     def x_checks(self) -> list[Check]: return self._x_checks
     def z_checks(self) -> list[Check]: return self._z_checks
-    def local_coord(self, q: Qubit):
-        raise NotImplementedError
-    def local_coord_chk(self, typ:str, idx:int):
-        raise NotImplementedError
+    def local_coord(self, q: Qubit) -> tuple[float, float]:
+        """Cb 축(자기 qubit/check 좌표)이 세로(y, "열"), Ca 축이 가로(x, "행").
+        block1 은 오른쪽 아래, block2 는 왼쪽 위 사분면 (이전 버전에서 x<->y 를
+        뒤집은 것 -- Cb_A 가 열, Ca_A 가 행이 되도록)."""
+        idx = self.get_idx(q)
+        css = self.css
+        ra, na, nb = css.ra, css.na, css.nb
+        scale_x, scale_y = self.scale
+        if idx < ra * nb:                      # block1 : Ca0 (x) Cb1
+            b, j = divmod(idx, nb)
+            x, y = na + b, j
+        else:                                   # block2 : Ca1 (x) Cb0
+            i, s = divmod(idx - ra * nb, css.rb)
+            x, y = i, nb + s
+        return (float(x) * scale_x, float(y) * scale_y)
+
+    def local_coord_chk(self, typ: str, idx: int) -> tuple[float, float]:
+        """typ 은 'X' 또는 'Z'. idx 는 css.Hx / css.Hz 의 행 번호.
+        local_coord() 와 같은 x<->y 축 (Cb=세로, Ca=가로)."""
+        css = self.css
+        na, nb, rb = css.na, css.nb, css.rb
+        scale_x, scale_y = self.scale
+        if typ == "X":                          # Ca1 (x) Cb1
+            i, j = divmod(idx, nb)
+            x, y = i, j
+        elif typ == "Z":                        # Ca0 (x) Cb0
+            b, s = divmod(idx, rb)
+            x, y = na + b, nb + s
+        else:
+            raise ValueError("typ must be 'X' or 'Z'")
+        return (float(x) * scale_x, float(y) * scale_y)
 
 class LPCodePatch(CodePatch):
     def __init__(self, css: LPCode, patch_name: str = "lp", offset=(0.0, 0.0), scale=(1,1)):

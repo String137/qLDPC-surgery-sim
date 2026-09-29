@@ -14,6 +14,7 @@ import numpy as np
 from core.CSS import LinearCode
 from core.primitives import Qubit, Check, QubitRegistry
 from core.codes import *
+from docplex.mp.model import Model
 import itertools
 
 
@@ -143,40 +144,40 @@ class DirectSum(CodePatch):
 class ConePatch(CodePatch):
     """
     Cone code C̃ = cone(f) for homological measurement.
+    (Ide, Gowda, Nadkarni, Dauphinais, PRX 2025)
 
-    partial1대신 transpose된 partial1t를 쓸거임. shape도 고쳐주길 바람.
+        H̃_X = [ H_X   0   ]      H̃_Z = [ H_Z   f0 ]
+              [ f1^T  ∂1^T ]            [  0    ∂0 ]
+
+    데이터 블록은 **리스트** 로 받는다.  Cs = [C_1, ..., C_m] 이고
+    C = C_1 ⊕ ... ⊕ C_m 로 취급한다.  m=1 이면 단일 블록 surgery,
+    m=2 면 두 블록 merge.  (예전의 _ConePatch / ConePatch 를 통합한 것.)
+
     입력:
-        C1, C2   : 두 코드 패치. C = C1 ⊕ C2 로 취급.
-        A        : ancilla code 
-        f1       : np.ndarray, shape (n, w), F2  — eq.35
-        f0       : np.ndarray, shape (nZ, n0Z), F2  — eq.48
-                   commutativity: H_Z @ f1 = f0 @ partial1  (mod 2)
-        partial1t   : np.ndarray, shape (w, n0Z), F2  — eq.47 + Algorithm 1
-        partial0   : np.ndarray, shape (n_cyc, n0Z), F2 or None  — Algorithm 2
-
-    f0의 i번째 행은 기존 code의 i번째 Z check에 추가될 ancilla qubit들의 조합. Check(Z) 객체로 들어옴.
-    f1t의 i번째 행은 ancilla code의 i번째 X check에 추가될 기존 data qubit들의 조합. Check(X) 객체로 들어옴.
+        Cs   : list[CodePatch]  — 데이터 블록들
+        A    : CodePatch        — ancilla
+        f1t  : list[Check]      — A 의 i 번째 X-check 에 추가될 데이터 qubit 조합
+        f0   : list[Check]      — 데이터의 i 번째 Z-check 에 추가될 ancilla qubit 조합
+                                  (순서는 C_1.z_checks() + ... + C_m.z_checks())
     """
 
     def __init__(
         self,
-        C1: CodePatch,
-        C2: CodePatch,
+        Cs,                       # list[CodePatch]  (또는 단일 CodePatch)
         A: CodePatch,
         f1t: list[Check],
         f0: list[Check],
         name: str = "cone",
     ):
+        if isinstance(Cs, CodePatch):
+            Cs = [Cs]
         self._name = name
-        self.C1 = C1
-        self.C2 = C2
-        self.A  = A
+        self.Cs = list(Cs)
+        self.A = A
         self._f0 = f0
         self._f1t = f1t
 
-        direct_sum = DirectSum(C1, C2)
-        c_qubits = direct_sum.data_qubits()
-
+        c_qubits = [q for C in self.Cs for q in C.data_qubits()]
         a_qubits = A.data_qubits()
         self._data_qubits = c_qubits + a_qubits
 
@@ -184,29 +185,47 @@ class ConePatch(CodePatch):
         self._registry.register(c_qubits)
         self._registry.register(a_qubits)
 
-        self.patch_name_dict = {
-            C1._name: C1,
-            C2._name: C2,
-            A._name: A
-        }
+        self.patch_name_dict = {C._name: C for C in self.Cs}
+        self.patch_name_dict[A._name] = A
 
-        partial0 = A.z_checks() if A.z_checks() else []
+        partial0  = A.z_checks() if A.z_checks() else []
         partial1t = A.x_checks() if A.x_checks() else []
 
-        assert len(direct_sum.z_checks()) == len(f0)
-        self._z_checks = direct_sum.z_checks()
+        # local_coord_chk 용 블록별 경계
+        self._n_zC = [len(C.z_checks()) for C in self.Cs]
+        self._n_xC = [len(C.x_checks()) for C in self.Cs]
+
+        z_all = [chk for C in self.Cs for chk in C.z_checks()]
+        x_all = [chk for C in self.Cs for chk in C.x_checks()]
+
+        assert len(z_all) == len(f0), f"f0 길이 {len(f0)} != Z-check 총 {len(z_all)}"
+        self._z_checks = list(z_all)
         for i in range(len(f0)):
             if f0[i].weight() > 0:
                 self._z_checks[i] += f0[i]
-        for i in range(len(partial0)):
-            self._z_checks.append(partial0[i])
+        self._z_checks.extend(partial0)
 
-        assert len(partial1t) == len(f1t)
-        self._x_checks = direct_sum.x_checks()
+        assert len(partial1t) == len(f1t), \
+            f"f1t 길이 {len(f1t)} != A 의 X-check {len(partial1t)}"
+        self._x_checks = list(x_all)
         for i in range(len(f1t)):
             self._x_checks.append(f1t[i] + partial1t[i])
 
-        
+        self.css = None       # CodePatch.__init__ 을 안 거치므로 직접 초기화
+
+    # -- 편의 접근자 (예전 코드 호환) -----------------------------------------
+    @property
+    def C(self):
+        assert len(self.Cs) == 1, "블록이 여러 개다. self.Cs 를 쓸 것."
+        return self.Cs[0]
+
+    @property
+    def C1(self): return self.Cs[0]
+
+    @property
+    def C2(self):
+        assert len(self.Cs) >= 2, "블록이 하나뿐이다."
+        return self.Cs[1]
 
     @property
     def name(self) -> str: return self._name
@@ -214,115 +233,61 @@ class ConePatch(CodePatch):
     def data_qubits(self) -> list[Qubit]: return self._data_qubits
     def x_checks(self)   -> list[Check]:  return self._x_checks
     def z_checks(self)   -> list[Check]:  return self._z_checks
-    def x_logicals(self):                 return self._x_logicals
-    def z_logicals(self):                 return self._z_logicals
     def make_registry(self) -> QubitRegistry: return self._registry
 
+    def x_logicals(self):
+        raise NotImplementedError(
+            "logical 대표원은 init_logical_representatives() 로 css 에 설정된다. "
+            "self.css.logical_x_repr 를 쓸 것.")
+
+    def z_logicals(self):
+        raise NotImplementedError(
+            "logical 대표원은 init_logical_representatives() 로 css 에 설정된다. "
+            "self.css.logical_z_repr 를 쓸 것.")
+
     def local_coord(self, q: Qubit) -> tuple[float, float]:
-        # ConePatch에서의 local_coord
         lx, ly = self.patch_name_dict[q.patch_name].local_coord(q)
         ox, oy = self.patch_name_dict[q.patch_name]._offset
         return lx + ox, ly + oy
-    
+
+    def local_coord_chk(self, typ: str, idx: int) -> tuple[float, float]:
+        """merged 체크의 좌표. C_1, ..., C_m 순서로 이어붙인 뒤 A 가 온다.
+        f1t/f0 는 기존 체크에 큐빗을 덧붙이기만 하므로 체크의 정체성은
+        원래 패치 것 그대로다."""
+        if typ == "X":
+            ns = self._n_xC
+        elif typ == "Z":
+            ns = self._n_zC
+        else:
+            raise ValueError("typ must be 'X' or 'Z'")
+        local = idx
+        for C, n in zip(self.Cs, ns):
+            if local < n:
+                lx, ly = C.local_coord_chk(typ, local)
+                ox, oy = C._offset
+                return lx + ox, ly + oy
+            local -= n
+        lx, ly = self.A.local_coord_chk(typ, local)
+        ox, oy = self.A._offset
+        return lx + ox, ly + oy
+
     def get_idx(self, q: Qubit) -> int:
         return self._registry[q]
 
     def h_x_tilde(self) -> np.ndarray:
-        """H̃_X = [H_X | 0 ; f1^T | ∂1^T]"""
-        # TODO
-        # 굳이 구현 안해도 될 듯. x_checks()에서 이미 implicit하게 표현되어 있음.
+        """H̃_X = [H_X | 0 ; f1^T | ∂1^T].  x_checks() 에 이미 implicit."""
         raise NotImplementedError
 
     def h_z_tilde(self) -> np.ndarray:
         """H̃_Z = [H_Z | f0 ; ∂0 | 0]"""
-        # TODO
         raise NotImplementedError
 
 
-class _ConePatch(CodePatch):
-    """
-    ConePatch의 C 하나 있는 버전.
-    사실 이게 원래 ConePatch여야하는게 맞음.
-    # TODO: 언젠가 _ConePatch를 ConePatch로 바꾸고, ConePatch는 ConePatch2같은 다른 이름으로 바꾸자.
-    """
-
-    def __init__(
-        self,
-        C: CodePatch,
-        A: CodePatch,
-        f1t: list[Check],
-        f0: list[Check],
-        name: str = "cone",
-    ):
-        self._name = name
-        self.C = C
-        self.A  = A
-        self._f0 = f0
-        self._f1t = f1t
-
-        c_qubits = self.C.data_qubits()
-
-        a_qubits = A.data_qubits()
-        self._data_qubits = c_qubits + a_qubits
-
-        self._registry = QubitRegistry()
-        self._registry.register(c_qubits)
-        self._registry.register(a_qubits)
-
-        self.patch_name_dict = {
-            C._name: C,
-            A._name: A
-        }
-
-        partial0 = A.z_checks() if A.z_checks() else []
-        partial1t = A.x_checks() if A.x_checks() else []
-
-        assert len(C.z_checks()) == len(f0)
-        self._z_checks = C.z_checks()
-        for i in range(len(f0)):
-            if f0[i].weight() > 0:
-                self._z_checks[i] += f0[i]
-        for i in range(len(partial0)):
-            self._z_checks.append(partial0[i])
-
-        assert len(partial1t) == len(f1t)
-        self._x_checks = C.x_checks()
-        for i in range(len(f1t)):
-            self._x_checks.append(f1t[i] + partial1t[i])
-
-        self.css = None
-        
-
-    @property
-    def name(self) -> str: return self._name
-
-    def data_qubits(self) -> list[Qubit]: return self._data_qubits
-    def x_checks(self)   -> list[Check]:  return self._x_checks
-    def z_checks(self)   -> list[Check]:  return self._z_checks
-    def x_logicals(self):                 return self._x_logicals
-    def z_logicals(self):                 return self._z_logicals
-    def make_registry(self) -> QubitRegistry: return self._registry
-
-    def local_coord(self, q: Qubit) -> tuple[float, float]:
-        # ConePatch에서의 local_coord
-        lx, ly = self.patch_name_dict[q.patch_name].local_coord(q)
-        ox, oy = self.patch_name_dict[q.patch_name]._offset
-        return lx + ox, ly + oy
-    
-    def get_idx(self, q: Qubit) -> int:
-        return self._registry[q]
-
-    def h_x_tilde(self) -> np.ndarray:
-        """H̃_X = [H_X | 0 ; f1^T | ∂1^T]"""
-        # TODO
-        # 굳이 구현 안해도 될 듯. x_checks()에서 이미 implicit하게 표현되어 있음.
-        raise NotImplementedError
-
-    def h_z_tilde(self) -> np.ndarray:
-        """H̃_Z = [H_Z | f0 ; ∂0 | 0]"""
-        # TODO
-        raise NotImplementedError
-
+class _ConePatch(ConePatch):
+    """DEPRECATED. ConePatch 가 데이터 블록 리스트를 받게 일반화되면서 흡수됨.
+    _ConePatch(C, A, f1t, f0) == ConePatch([C], A, f1t, f0)."""
+    def __init__(self, C, A, f1t, f0, name: str = "cone"):
+        super().__init__([C], A, f1t, f0, name=name)
 
 
 class MergedCodeWithGraph(ConePatch):
@@ -428,8 +393,14 @@ class MergedCodeWithGraph(ConePatch):
     def data_qubits(self) -> list[Qubit]: return self._data_qubits
     def x_checks(self)   -> list[Check]:  return self._x_checks
     def z_checks(self)   -> list[Check]:  return self._z_checks
-    def x_logicals(self):                 return self._x_logicals
-    def z_logicals(self):                 return self._z_logicals
+    def x_logicals(self):
+        raise NotImplementedError(
+            "logical 대표원은 init_logical_representatives() 로 css 에 설정된다. "
+            "self.css.logical_x_repr 를 쓸 것.")
+    def z_logicals(self):
+        raise NotImplementedError(
+            "logical 대표원은 init_logical_representatives() 로 css 에 설정된다. "
+            "self.css.logical_z_repr 를 쓸 것.")
     def make_registry(self) -> QubitRegistry: return self._registry
 
     # def local_coord(self, q: Qubit) -> tuple[float, float]:
@@ -666,307 +637,87 @@ class TrivialHomomorphism(Homomorphism):
         ctol = np.zeros((B.n, A.n - A.k), dtype=int)
         super().__init__(A, B, ltol, ctol)
 
-class HighRateSurgeryPatch(_ConePatch):
+class HighRateSurgeryPatch(ConePatch):
     """
-    High-rate surgery (arXiv:2510.08523) — HGP 데이터 코드 + HGP 앤실라.
+    High-rate surgery (arXiv:2510.08523) — HGP 데이터 블록 + HGP 앤실라.
 
-    확정 컨벤션: HGPCode(Ca, Cb) = HGP(B=Ca, D=Cb),  ∂ = H.
+    데이터 블록을 **리스트** 로 받는다.  Cs = [C_1, ..., C_m].
+        m = 1 : 단일 블록 surgery (논문 원본)
+        m = 2 : 두 블록 merge, 즉 L^(1)·L^(2) 측정
 
-        A1 = Ca1_A (x) Cb1_A        ker ∂1^A = ker(Ha_A) (x) ker(Hb_A)
-        측정 대상 = 데이터의 F-II logical  e_c^{Ca0_C} (x) ker(Hb_C)   (block1)
+    확정 컨벤션: HGPCode(Ca, Cb) = HGP(D=Ca, B=Cb),  ∂ = H.
+        writeup 표기의 B 는 gamma_1 이 작용하는 코드, 즉 Cb 쪽이다.
+        Gamma_1 은 x[q_t, :] 를 읽고 그 슬라이스는 Cb 좌표로 indexing 된다.
+        q_t 는 Ca 의 information bit = writeup 의 D^A 쪽 index.
+
+        A1 = Ca1_A ⊗ Cb1_A          ker ∂1^A = ker(Ha_A) ⊗ ker(Hb_A)
+        측정 대상 = 데이터의 F-II logical  e_c^{Ca0_C} ⊗ ker(Hb_C)   (block1)
 
     chain map 은 column 별로 쪼개진다 (논문 Eq.11, D23):
 
-        Γ1 = Σ_t ( e_{c_t} e_{q_t}^T ) (x) γ1^t   :  A1        -> C block1
-        Γ0 = Σ_t ( e_{c_t} e_{q_t}^T ) (x) γ0^t   :  A block2  -> C0
+        Γ1^(m) = Σ_t ( e_{c_t^(m)} e_{q_t}^T ) ⊗ γ1^(t,m)
+        Γ0^(m) = Σ_t ( e_{c_t^(m)} e_{q_t}^T ) ⊗ γ0^(t,m)
 
-        q_t : 앤실라 column = Ca_A 의 information bit
-        c_t : 데이터 column = CaT_C 의 information bit
-        γ^t : Cb_A -> Cb_C  classical homomorphism
-
-    교환조건 Γ0 ∂1^A = ∂1^C Γ1 은 t 마다 Hb_C γ1^t = γ0^t Hb_A 로 환원된다.
-    측정되는 것은 Γ1(ker ∂1^A) = span{ e_{c_t} (x) γ1^t(v) : v ∈ ker Hb_A }.
-
-    Parameters
-    ----------
-    C, A : HGPCodePatch
-    columns : list of (ia, ic, gamma)
-        ia    : A.css.Ca  의 logical index   -> 앤실라 column
-        ic    : C.css.CaT 의 logical index   -> 데이터 column
-        gamma : Homomorphism(A.css.Cb, C.css.Cb, ...) 또는 ltol 배열
-                (Homomorphism 을 직접 주면 ctol 자동탐색을 건너뛸 수 있음)
-    """
-
-    def __init__(self, C, A, columns, name: str = "high-rate-surgery"):
-        assert C._name != A._name, "C 와 A 의 patch_name 이 같으면 Qubit 이 충돌함"
-        self.C, self.A = C, A
-        cssC, cssA = C.css, A.css
-
-        qA = cssA.Ca.pivots()     # 앤실라 column 후보 (Ca_A 의 information bit)
-        cC = cssC.CaT.pivots()    # 데이터 column 후보 (CaT_C 의 information bit)
-
-        self.columns = []
-        used_q, used_c = set(), set()
-        for ia, ic, gamma in columns:
-            assert 0 <= ia < cssA.Ca.k,  f"ia={ia} 는 [0,{cssA.Ca.k}) 범위여야 함"
-            assert 0 <= ic < cssC.CaT.k, f"ic={ic} 는 [0,{cssC.CaT.k}) 범위여야 함"
-            assert ia not in used_q, f"앤실라 column {ia} 중복"
-            assert ic not in used_c, f"데이터 column {ic} 중복"
-            used_q.add(ia); used_c.add(ic)
-
-            if not isinstance(gamma, Homomorphism):
-                gamma = Homomorphism(cssA.Cb, cssC.Cb, gamma)
-            g1 = np.asarray(gamma.gamma1, dtype=int) % 2
-            g0 = np.asarray(gamma.gamma0, dtype=int) % 2
-            assert g1.shape == (cssC.nb, cssA.nb), f"gamma1 shape {g1.shape}"
-            assert g0.shape == (cssC.rb, cssA.rb), f"gamma0 shape {g0.shape}"
-            Hb_A = np.asarray(cssA.Cb.H, dtype=int)
-            Hb_C = np.asarray(cssC.Cb.H, dtype=int)
-            assert not ((Hb_C @ g1 - g0 @ Hb_A) % 2).any(), \
-                "commuting diagram 실패: Hb_C @ gamma1 != gamma0 @ Hb_A"
-
-            self.columns.append((qA[ia], cC[ic], gamma, g1, g0))
-
-        f1t = self._build_f1t()
-        f0  = self._build_f0()
-        super().__init__(C, A, f1t, f0, name=name)
-
-    # -- Γ1 : 앤실라 X check -> 데이터 qubit -------------------------------
-    def _build_f1t(self):
-        cssC, cssA = self.C.css, self.A.css
-        cq = self.C.data_qubits()
-        f1t = [Check.get_empty_check()] * len(self.A.x_checks())
-        for q_t, c_t, _, g1, _ in self.columns:
-            for j in range(cssA.nb):                       # Cb_A bit
-                sup = [cq[cssC.qubit1_idx(c_t, u)]
-                       for u in np.nonzero(g1[:, j])[0]]
-                if sup:
-                    idx = cssA.x_check_idx(q_t, j)
-                    f1t[idx] = f1t[idx] + Check(frozenset(sup), "X")
-        return f1t
-
-    # -- Γ0 : 데이터 Z check -> 앤실라 qubit -------------------------------
-    def _build_f0(self):
-        cssC, cssA = self.C.css, self.A.css
-        aq = self.A.data_qubits()
-        f0 = [Check.get_empty_check()] * len(self.C.z_checks())
-        for q_t, c_t, _, _, g0 in self.columns:
-            for s in range(cssC.rb):                       # Cb_C check
-                sup = [aq[cssA.qubit2_idx(q_t, sig)]
-                       for sig in np.nonzero(g0[s, :])[0]]
-                if sup:
-                    idx = cssC.z_check_idx(c_t, s)
-                    f0[idx] = f0[idx] + Check(frozenset(sup), "Z")
-        return f0
-
-
-    # -- logical representatives --------------------------------------------
-    def _column_quotient_basis(self, g1, max_enum: int = 1 << 20):
-        """
-        데이터 column c_t 에서 살아남는 X-logical class 의 대표원.
-
-            ker(Hb_C) / gamma1^t(ker Hb_A)
-
-        coset leader (최소 weight) 를 고른다. 2^k_b 열거가 max_enum 을 넘으면
-        weight 최적화를 포기하고 임의 complement 로 fallback.
-        """
-        cssC = self.C.css
-        Gb = np.asarray(cssC.Cb.G, dtype=int) % 2          # ker(Hb_C) 의 basis
-        Ga = np.asarray(self.A.css.Cb.G, dtype=int) % 2    # ker(Hb_A) 의 basis
-        kb, nb = cssC.Cb.k, cssC.nb
-        F = cssC.F
-        rk = lambda M: 0 if np.size(M) == 0 else int(np.linalg.matrix_rank(F(np.asarray(M, dtype=int) % 2)))
-
-        meas = np.array([(g1 @ v) % 2 for v in Ga], dtype=int).reshape(len(Ga), nb)
-        d_meas = rk(meas)
-
-        if (1 << kb) > max_enum or d_meas == 0:
-            leaders = list(Gb)                              # fallback / 측정 없음
-        else:
-            span = [np.zeros(nb, dtype=int)]
-            for m in range(1, 1 << len(meas)):
-                span.append(np.bitwise_xor.reduce(
-                    [meas[i] for i in range(len(meas)) if m >> i & 1], axis=0))
-            span = np.array(span, dtype=int)
-            seen = {}
-            for m in range(1 << kb):
-                v = (np.bitwise_xor.reduce([Gb[i] for i in range(kb) if m >> i & 1], axis=0)
-                     if m else np.zeros(nb, dtype=int))
-                key = tuple(sorted(map(tuple, (v + span) % 2)))
-                if key not in seen:
-                    seen[key] = min(((v + s) % 2 for s in span), key=lambda x: int(x.sum()))
-            leaders = [r for r in seen.values() if r.any()]
-
-        basis = meas.copy()
-        out = []
-        for r in leaders:
-            if rk(np.vstack([basis, r])) > rk(basis):
-                basis = np.vstack([basis, r])
-                out.append(r)
-        assert len(out) == kb - d_meas, f"quotient dim {len(out)} != {kb - d_meas}"
-        return out
-
-    def init_logical_representatives(self, minimize: bool = True):
-        """
-        merged code 의 logical representative 설정.
-
-          1. X : 측정에 관여하지 않은 column 은 데이터 코드 것 그대로,
-                 관여한 column 은 ker(Hb_C)/gamma1^t(ker Hb_A) 의 coset leader.
-                 F-I (block2) 는 Gamma1 이 block1 으로만 가므로 항상 그대로.
-          2. 나머지 (앤실라 gauge logical 포함) 와 Z 전부는 set_missing_logicals() 에 위임.
-          3. minimize=True 면 _minimize_logical_op 으로 weight 최소화.
-             같은 타입 stabilizer 를 곱하는 것이라 symplectic pairing 은 보존된다.
-        """
-        if self.css is None:
-            self.make_css()
-        css, cssC = self.css, self.C.css
-        N = css.n
-
-        touched = {c_t: g1 for _, c_t, _, g1, _ in self.columns}
-        Gb = np.asarray(cssC.Cb.G, dtype=int) % 2
-        GaT = np.asarray(cssC.CaT.G, dtype=int) % 2
-        pa, paT, pbT = cssC.Ca.pivots(), cssC.CaT.pivots(), cssC.CbT.pivots()
-
-        xreps = []
-        # F-I : block2, Gamma1 이 건드리지 않으므로 데이터 코드 것 그대로
-        Ga = np.asarray(cssC.Ca.G, dtype=int) % 2
-        for p in range(cssC.Ca.k):
-            for q in range(cssC.CbT.k):
-                v = np.zeros(N, dtype=int)
-                for i in np.nonzero(Ga[p])[0]:
-                    v[cssC.qubit2_idx(i, pbT[q])] = 1
-                xreps.append(v)
-        # F-II : block1, column 별
-        for b in range(cssC.CaT.k):
-            c = paT[b]
-            reps = self._column_quotient_basis(touched[c]) if c in touched else list(Gb)
-            for r in reps:
-                v = np.zeros(N, dtype=int)
-                for u in np.nonzero(r)[0]:
-                    v[cssC.qubit1_idx(c, u)] = 1
-                xreps.append(v)
-
-        assert len(xreps) <= css.k, f"X reps {len(xreps)} > k_merged {css.k}"
-        self.n_data_logicals = len(xreps)
-        self.n_gauge_logicals = css.k - len(xreps)          # = k_A
-
-        css.logical_x_repr = [None] * css.k
-        css.logical_z_repr = [None] * css.k
-        for i, v in enumerate(xreps):
-            css.set_logical_representative("X", i, v)
-        css.set_missing_logicals()
-
-        if minimize:
-            for i in range(css.k):
-                css.logical_x_repr[i] = css._minimize_logical_op("X", css.logical_x_repr[i])
-                css.logical_z_repr[i] = css._minimize_logical_op("Z", css.logical_z_repr[i])
-        return self
-
-    # -- 측정되는 operator ---------------------------------------------------
-    def measured_operators(self) -> np.ndarray:
-        """Γ1(ker ∂1^A) 의 생성원들을 데이터 코드 qubit 위 벡터로 반환. (rows)"""
-        cssC, cssA = self.C.css, self.A.css
-        Ga = np.asarray(cssA.Ca.G, dtype=int)              # ker(Ha_A)
-        Gb = np.asarray(cssA.Cb.G, dtype=int)              # ker(Hb_A)
-        out = []
-        for w in Ga:
-            for v in Gb:
-                vec = np.zeros(cssC.n, dtype=int)
-                for q_t, c_t, _, g1, _ in self.columns:
-                    if w[q_t]:
-                        img = (g1 @ v) % 2
-                        for u in np.nonzero(img)[0]:
-                            vec[cssC.qubit1_idx(c_t, u)] ^= 1
-                out.append(vec)
-        return np.array(out, dtype=int).reshape(len(out), cssC.n)
-
-    def report(self):
-        cssC, cssA = self.C.css, self.A.css
-        F = cssC.F
-        M = self.measured_operators()
-        dim_M = int(np.linalg.matrix_rank(F(M % 2))) if M.size else 0
-        print("=" * 62)
-        print(f"{self._name}:  data [[{cssC.n},{cssC.k}]]  +  ancilla [[{cssA.n},{cssA.k}]]")
-        print("=" * 62)
-        print(f"  columns          : {len(self.columns)}   "
-              f"(앤실라 q={[c[0] for c in self.columns]}, 데이터 c={[c[1] for c in self.columns]})")
-        print(f"  dim ker ∂1^A     : {cssA.Ca.k * cssA.Cb.k}")
-        print(f"  dim M = dim Γ1(ker ∂1^A) : {dim_M}")
-        deg = max(max(int(g.sum(axis=0).max()), int(g.sum(axis=1).max()))
-                  for *_, g, _ in self.columns)
-        print(f"  |Γ1|             : {deg}   (transversal 이면 1)")
-        print(f"  merged commutativity : {self.check_commutativity()}")
-        print(f"  merged n / k     : {len(self.data_qubits())} / {self.get_k()}"
-              f"   (기대값 k = {cssC.k} - {dim_M} + {cssA.k} = {cssC.k - dim_M + cssA.k})")
-
-class MergedHighRateSurgeryPatch(ConePatch):
-    """
-    High-rate surgery (arXiv:2510.08523) 의 두 블록 버전.
-    CSS code C1, C2 를 ancilla code A 로 merge 해서 L^(1) · L^(2) 를 측정한다.
-
-    확정 컨벤션: HGPCode(Ca, Cb) = HGP(B=Ca, D=Cb),  ∂ = H.
-    C = C1 ⊕ C2 로 두고 ConePatch 에 넘긴다.
-
-    column t 마다 세 개의 index 와 두 개의 homomorphism:
-
-        q_t     : 앤실라 column = A.css.Ca   의 information bit
-        c1_t    : C1 column    = C1.css.CaT 의 information bit
-        c2_t    : C2 column    = C2.css.CaT 의 information bit
-        γ^(1),t : Cb_A -> Cb_C1
-        γ^(2),t : Cb_A -> Cb_C2
-
-        Γ1 = Σ_t (e_{c1_t} e_{q_t}^T) ⊗ γ1^(1),t   ⊕   Σ_t (e_{c2_t} e_{q_t}^T) ⊗ γ1^(2),t
-        Γ0 도 같은 꼴로 C1 ⊕ C2 의 Z-check 쪽에 붙는다.
-
-    교환조건 Γ0 ∂1^A = ∂1^C Γ1 은 블록별로 독립적으로 성립하면 된다:
-
-        Hb_C1 γ1^(1) = γ0^(1) Hb_A ,   Hb_C2 γ1^(2) = γ0^(2) Hb_A
-
-    그래서 C1 과 C2 는 서로 달라도 되고 (n, k, Cb 전부), 공유하는 것은 A 뿐이다.
+    교환조건 Γ0 ∂1^A = ∂1^C Γ1 은 블록마다 독립적으로
+        Hb_C^(m) γ1^(t,m) = γ0^(t,m) Hb_A
+    로 환원되므로, 블록들은 서로 달라도 되고 공유하는 것은 A 뿐이다.
 
     측정되는 것:
-
-        Γ1(ker ∂1^A) = span{ e_{c1_t} ⊗ γ1^(1),t(v)  +  e_{c2_t} ⊗ γ1^(2),t(v) }
-                       ( v ∈ ker Hb_A,  w ∈ ker Ha_A 이고 w[q_t] = 1 인 t 에 대해 합 )
-
-    ker ∂1^A 의 원소 하나가 C1 과 C2 양쪽에 동시에 상을 남기므로, 측정되는 연산자는
-    항상 C1 의 X-logical 과 C2 의 X-logical 의 곱 꼴이다.
+        Γ1(ker ∂1^A) = span{ Σ_m e_{c_t^(m)} ⊗ γ1^(t,m)(v) : v ∈ ker Hb_A }
+    m ≥ 2 이면 ker ∂1^A 의 원소 하나가 모든 블록에 동시에 상을 남기므로
+    측정되는 연산자는 항상 블록별 X-logical 의 곱 꼴이다 (가정 A1).
 
     Parameters
     ----------
-    C1, C2, A : HGPCodePatch     (patch_name 셋 다 달라야 함)
-    columns : list of (ia, ic1, ic2, gamma1, gamma2)
-        ia     : A.css.Ca   의 logical index
-        ic1    : C1.css.CaT 의 logical index
-        ic2    : C2.css.CaT 의 logical index
-        gamma1 : Homomorphism(A.css.Cb, C1.css.Cb, ...) 또는 ltol 배열
-        gamma2 : Homomorphism(A.css.Cb, C2.css.Cb, ...) 또는 ltol 배열
+    Cs      : list[HGPCodePatch]  (또는 단일 HGPCodePatch)
+    A       : HGPCodePatch        (patch_name 이 전부 달라야 함)
+    columns : list of (ia, ics, gammas)
+        ia     : A.css.Ca 의 logical index            -> 앤실라 column
+        ics    : list[int], 길이 m. ics[j] 는 Cs[j].css.CaT 의 logical index
+        gammas : list, 길이 m. Homomorphism(A.css.Cb, Cs[j].css.Cb) 또는 ltol 배열
+        (m = 1 이면 ics, gammas 에 스칼라를 줘도 된다)
+
+    Note
+    ----
+    d2 >= 18 (r_A >= 17) 이면 Homomorphism 의 ctol 자동탐색이 2^{r_A} 열거로
+    죽는다. 그 경우 Homomorphism 을 직접 만들어 넘길 것:
+        ctol = gamma1[:, A.css.Cb.complement()]
+        h = Homomorphism(A.css.Cb, C.css.Cb, ltol, ctol=ctol)
     """
 
-    def __init__(self, C1, C2, A, columns, name: str = "merged-high-rate-surgery"):
-        names = [C1._name, C2._name, A._name]
-        assert len(set(names)) == 3, f"patch_name 이 겹치면 Qubit 이 충돌함: {names}"
-        self.C1, self.C2, self.A = C1, C2, A
+    def __init__(self, Cs, A, columns, name: str = "high-rate-surgery"):
+        if isinstance(Cs, CodePatch):
+            Cs = [Cs]
+        Cs = list(Cs)
+        names = [C._name for C in Cs] + [A._name]
+        assert len(set(names)) == len(names), f"patch_name 이 겹치면 Qubit 이 충돌함: {names}"
+        self.Cs, self.A = Cs, A
+        m = len(Cs)
         cssA = A.css
 
-        qA  = cssA.Ca.pivots()       # 앤실라 column 후보
-        cC1 = C1.css.CaT.pivots()    # C1 column 후보
-        cC2 = C2.css.CaT.pivots()    # C2 column 후보
+        qA  = cssA.Ca.pivots()                       # 앤실라 column 후보
+        cCs = [C.css.CaT.pivots() for C in Cs]       # 블록별 column 후보
+        Hb_A = np.asarray(cssA.Cb.H, dtype=int)
 
         self.columns = []
-        used_q, used_c1, used_c2 = set(), set(), set()
-        for ia, ic1, ic2, gam1, gam2 in columns:
-            assert 0 <= ia  < cssA.Ca.k,    f"ia={ia} 는 [0,{cssA.Ca.k}) 범위여야 함"
-            assert 0 <= ic1 < C1.css.CaT.k, f"ic1={ic1} 는 [0,{C1.css.CaT.k}) 범위여야 함"
-            assert 0 <= ic2 < C2.css.CaT.k, f"ic2={ic2} 는 [0,{C2.css.CaT.k}) 범위여야 함"
-            assert ia  not in used_q,  f"앤실라 column {ia} 중복"
-            assert ic1 not in used_c1, f"C1 column {ic1} 중복"
-            assert ic2 not in used_c2, f"C2 column {ic2} 중복"
-            used_q.add(ia); used_c1.add(ic1); used_c2.add(ic2)
+        used_q = set()
+        used_c = [set() for _ in range(m)]
+        for ia, ics, gammas in columns:
+            if np.isscalar(ics):    ics    = [ics]
+            if not isinstance(gammas, (list, tuple)): gammas = [gammas]
+            assert len(ics) == m and len(gammas) == m, \
+                f"블록 {m} 개인데 ics={len(ics)}, gammas={len(gammas)}"
+            assert 0 <= ia < cssA.Ca.k, f"ia={ia} 는 [0,{cssA.Ca.k}) 범위여야 함"
+            assert ia not in used_q, f"앤실라 column {ia} 중복"
+            used_q.add(ia)
 
-            Hb_A = np.asarray(cssA.Cb.H, dtype=int)
             gs = []
-            for C, gam in ((C1, gam1), (C2, gam2)):
+            for j, (C, ic, gam) in enumerate(zip(Cs, ics, gammas)):
+                assert 0 <= ic < C.css.CaT.k, \
+                    f"ics[{j}]={ic} 는 [0,{C.css.CaT.k}) 범위여야 함"
+                assert ic not in used_c[j], f"{C._name} column {ic} 중복"
+                used_c[j].add(ic)
+
                 if not isinstance(gam, Homomorphism):
                     gam = Homomorphism(cssA.Cb, C.css.Cb, gam)
                 g1 = np.asarray(gam.gamma1, dtype=int) % 2
@@ -980,19 +731,18 @@ class MergedHighRateSurgeryPatch(ConePatch):
                     f"commuting diagram 실패 ({C._name}): Hb @ gamma1 != gamma0 @ Hb_A"
                 gs.append((gam, g1, g0))
 
-            self.columns.append((qA[ia], cC1[ic1], cC2[ic2], gs[0], gs[1]))
+            self.columns.append((qA[ia], [cCs[j][ics[j]] for j in range(m)], gs))
 
         f1t = self._build_f1t()
         f0  = self._build_f0()
-        super().__init__(C1, C2, A, f1t, f0, name=name)
-        self.css = None   # ConePatch 가 CodePatch.__init__ 을 안 부르므로 직접 초기화
+        super().__init__(Cs, A, f1t, f0, name=name)
 
-    # -- column 을 (patch, column index, g1, g0) 로 펼치는 helper --------------
+    # -- column -> (블록, column index, g1, g0) 리스트 -------------------------
     def _legs(self, col):
-        q_t, c1_t, c2_t, (_, g1a, g0a), (_, g1b, g0b) = col
-        return q_t, ((self.C1, c1_t, g1a, g0a), (self.C2, c2_t, g1b, g0b))
+        q_t, cts, gs = col
+        return q_t, [(self.Cs[j], cts[j], gs[j][1], gs[j][2]) for j in range(len(self.Cs))]
 
-    # -- Γ1 : 앤실라 X check -> C1, C2 의 data qubit ---------------------------
+    # -- Γ1 : 앤실라 X check -> 데이터 qubit -----------------------------------
     def _build_f1t(self):
         cssA = self.A.css
         f1t = [Check.get_empty_check()] * len(self.A.x_checks())
@@ -1000,73 +750,73 @@ class MergedHighRateSurgeryPatch(ConePatch):
             q_t, legs = self._legs(col)
             for C, c_t, g1, _ in legs:
                 cq, css = C.data_qubits(), C.css
-                for j in range(cssA.nb):                   # Cb_A bit
-                    sup = [cq[css.qubit1_idx(c_t, u)]
-                           for u in np.nonzero(g1[:, j])[0]]
+                for j in range(cssA.nb):                      # Cb_A bit
+                    sup = [cq[css.qubit1_idx(c_t, u)] for u in np.nonzero(g1[:, j])[0]]
                     if sup:
                         idx = cssA.x_check_idx(q_t, j)
                         f1t[idx] = f1t[idx] + Check(frozenset(sup), "X")
         return f1t
 
-    # -- Γ0 : C1, C2 의 Z check -> 앤실라 qubit --------------------------------
+    # -- Γ0 : 데이터 Z check -> 앤실라 qubit -----------------------------------
     def _build_f0(self):
-        """DirectSum(C1, C2) 의 z_checks() 순서를 따른다 — C1 먼저, 그 다음 C2."""
+        """Z-check 순서는 C_1.z_checks() + ... + C_m.z_checks()."""
         cssA = self.A.css
         aq = self.A.data_qubits()
-        n1 = len(self.C1.z_checks())
-        f0 = [Check.get_empty_check()] * (n1 + len(self.C2.z_checks()))
+        offs, acc = [], 0
+        for C in self.Cs:
+            offs.append(acc); acc += len(C.z_checks())
+        f0 = [Check.get_empty_check()] * acc
         for col in self.columns:
             q_t, legs = self._legs(col)
-            for (C, c_t, _, g0), off in zip(legs, (0, n1)):
+            for (C, c_t, _, g0), off in zip(legs, offs):
                 css = C.css
-                for s in range(css.rb):                    # Cb_C check
-                    sup = [aq[cssA.qubit2_idx(q_t, sig)]
-                           for sig in np.nonzero(g0[s, :])[0]]
+                for s in range(css.rb):                       # Cb_C check
+                    sup = [aq[cssA.qubit2_idx(q_t, sig)] for sig in np.nonzero(g0[s, :])[0]]
                     if sup:
-                        idx = off + css.z_check_idx(c_t, s)
-                        f0[idx] = f0[idx] + Check(frozenset(sup), "Z")
+                        f0[off + css.z_check_idx(c_t, s)] += Check(frozenset(sup), "Z")
         return f0
 
     # -- 측정되는 operator -----------------------------------------------------
     def measured_operators(self) -> np.ndarray:
-        """Γ1(ker ∂1^A) 의 생성원을 C1 ⊕ C2 qubit 위 벡터로 반환 (rows).
-
-        열 순서는 [C1 의 n1 개 | C2 의 n2 개] 로, DirectSum / merged registry 와 같다.
-        """
+        """Γ1(ker ∂1^A) 의 **생성원** 을 C_1 ⊕ ... ⊕ C_m qubit 위 벡터로 반환 (rows).
+        basis 가 아니므로 rank 는 따로 재야 한다 (report 참고)."""
         cssA = self.A.css
-        n1, n2 = self.C1.css.n, self.C2.css.n
-        Ga = np.asarray(cssA.Ca.G, dtype=int)              # ker(Ha_A)
-        Gb = np.asarray(cssA.Cb.G, dtype=int)              # ker(Hb_A)
+        ns = [C.css.n for C in self.Cs]
+        offs, acc = [], 0
+        for n in ns:
+            offs.append(acc); acc += n
+        Ga = np.asarray(cssA.Ca.G, dtype=int)                 # ker(Ha_A)
+        Gb = np.asarray(cssA.Cb.G, dtype=int)                 # ker(Hb_A)
         out = []
         for w in Ga:
             for v in Gb:
-                vec = np.zeros(n1 + n2, dtype=int)
+                vec = np.zeros(acc, dtype=int)
                 for col in self.columns:
                     q_t, legs = self._legs(col)
                     if not w[q_t]:
                         continue
-                    for (C, c_t, g1, _), off in zip(legs, (0, n1)):
+                    for (C, c_t, g1, _), off in zip(legs, offs):
                         for u in np.nonzero((g1 @ v) % 2)[0]:
                             vec[off + C.css.qubit1_idx(c_t, u)] ^= 1
                 out.append(vec)
-        return np.array(out, dtype=int).reshape(len(out), n1 + n2)
+        return np.array(out, dtype=int).reshape(len(out), acc)
 
     def report(self):
-        css1, css2, cssA = self.C1.css, self.C2.css, self.A.css
-        F = css1.F
+        cssA = self.A.css
+        F = self.Cs[0].css.F
         M = self.measured_operators()
         dim_M = int(np.linalg.matrix_rank(F(M % 2))) if M.size else 0
-        k_data = css1.k + css2.k
-        deg = max(max(int(g.sum(axis=0).max()), int(g.sum(axis=1).max()))
-                  for col in self.columns for _, _, g, _ in self._legs(col)[1])
+        k_data = sum(C.css.k for C in self.Cs)
+        deg = max(int(g1.sum(axis=0).max())
+                  for col in self.columns for _, _, g1, _ in self._legs(col)[1])
+        blocks = " + ".join(f"[[{C.css.n},{C.css.k}]]" for C in self.Cs)
         print("=" * 66)
-        print(f"{self._name}:  C1 [[{css1.n},{css1.k}]] + C2 [[{css2.n},{css2.k}]]"
-              f"  +  ancilla [[{cssA.n},{cssA.k}]]")
+        print(f"{self._name}:  {blocks}  +  ancilla [[{cssA.n},{cssA.k}]]")
         print("=" * 66)
         print(f"  columns          : {len(self.columns)}")
         print(f"     앤실라 q      : {[c[0] for c in self.columns]}")
-        print(f"     C1 c1         : {[c[1] for c in self.columns]}")
-        print(f"     C2 c2         : {[c[2] for c in self.columns]}")
+        for j, C in enumerate(self.Cs):
+            print(f"     {C._name} c      : {[c[1][j] for c in self.columns]}")
         print(f"  dim ker ∂1^A     : {cssA.Ca.k * cssA.Cb.k}")
         print(f"  dim M = dim Γ1(ker ∂1^A) : {dim_M}")
         print(f"  |Γ1|             : {deg}   (transversal 이면 1)")
@@ -1075,46 +825,47 @@ class MergedHighRateSurgeryPatch(ConePatch):
               f"   (기대값 k = {k_data} - {dim_M} + {cssA.k} = {k_data - dim_M + cssA.k})")
 
     # -- logical representatives ----------------------------------------------
-    def _column_quotient_basis(self, g1a, g1b, max_enum: int = 1 << 20):
+    def _column_quotient_basis(self, g1s, max_enum: int = 1 << 20):
         """
-        column pair (c1_t, c2_t) 에서 살아남는 X-logical class 의 대표원.
+        column tuple (c_t^(1), ..., c_t^(m)) 에서 살아남는 X-logical class 의 대표원.
 
-            ( ker(Hb_C1) (+) ker(Hb_C2) )  /  { (γ1^(1)v, γ1^(2)v) : v ∈ ker Hb_A }
+            ( ⊕_j ker(Hb_C^(j)) ) / { (γ1^(1)v, ..., γ1^(m)v) : v ∈ ker Hb_A }
 
-        길이 nb1+nb2 벡터로 반환. 앞 nb1 이 C1, 뒤 nb2 가 C2.
+        길이 Σ_j nb_j 벡터로 반환 (블록 순서대로 이어붙임).
         coset leader (최소 weight) 를 weight 오름차순 greedy 로 고른다.
-        2^(kb1+kb2) 열거가 max_enum 을 넘으면 weight 최적화를 포기하고 fallback.
         """
-        css1, css2, cssA = self.C1.css, self.C2.css, self.A.css
-        Gb1 = np.asarray(css1.Cb.G, dtype=int) % 2
-        Gb2 = np.asarray(css2.Cb.G, dtype=int) % 2
-        Ga  = np.asarray(cssA.Cb.G, dtype=int) % 2
-        kb1, kb2 = css1.Cb.k, css2.Cb.k
-        nb1, nb2 = css1.nb, css2.nb
-        kb, nb = kb1 + kb2, nb1 + nb2
-        F = css1.F
-        rk = lambda M: 0 if np.size(M) == 0 else int(np.linalg.matrix_rank(F(np.asarray(M, dtype=int) % 2)))
+        cssA = self.A.css
+        Ga = np.asarray(cssA.Cb.G, dtype=int) % 2
+        Gbs = [np.asarray(C.css.Cb.G, dtype=int) % 2 for C in self.Cs]
+        kbs = [C.css.Cb.k for C in self.Cs]
+        nbs = [C.css.nb for C in self.Cs]
+        kb, nb = sum(kbs), sum(nbs)
+        F = self.Cs[0].css.F
+        rk = lambda M: 0 if np.size(M) == 0 else int(
+            np.linalg.matrix_rank(F(np.asarray(M, dtype=int) % 2)))
 
         Gb = np.zeros((kb, nb), dtype=int)
-        Gb[:kb1, :nb1] = Gb1
-        Gb[kb1:, nb1:] = Gb2
+        ro = co = 0
+        for Gbj, kj, nj in zip(Gbs, kbs, nbs):
+            Gb[ro:ro+kj, co:co+nj] = Gbj
+            ro += kj; co += nj
 
-        meas = np.array([np.concatenate([(g1a @ v) % 2, (g1b @ v) % 2]) for v in Ga],
+        meas = np.array([np.concatenate([(g1 @ v) % 2 for g1 in g1s]) for v in Ga],
                         dtype=int).reshape(len(Ga), nb)
         d_meas = rk(meas)
 
         if (1 << kb) > max_enum or d_meas == 0:
-            leaders = list(Gb)                              # fallback / 측정 없음
+            leaders = list(Gb)                                # fallback / 측정 없음
         else:
             span = [np.zeros(nb, dtype=int)]
-            for m in range(1, 1 << len(meas)):
+            for mm in range(1, 1 << len(meas)):
                 span.append(np.bitwise_xor.reduce(
-                    [meas[i] for i in range(len(meas)) if m >> i & 1], axis=0))
+                    [meas[i] for i in range(len(meas)) if mm >> i & 1], axis=0))
             span = np.array(span, dtype=int)
             seen = {}
-            for m in range(1 << kb):
-                v = (np.bitwise_xor.reduce([Gb[i] for i in range(kb) if m >> i & 1], axis=0)
-                     if m else np.zeros(nb, dtype=int))
+            for mm in range(1 << kb):
+                v = (np.bitwise_xor.reduce([Gb[i] for i in range(kb) if mm >> i & 1], axis=0)
+                     if mm else np.zeros(nb, dtype=int))
                 key = tuple(sorted(map(tuple, (v + span) % 2)))
                 if key not in seen:
                     seen[key] = min(((v + s) % 2 for s in span), key=lambda x: int(x.sum()))
@@ -1131,25 +882,39 @@ class MergedHighRateSurgeryPatch(ConePatch):
 
     def init_logical_representatives(self, minimize: bool = True):
         """
-        merged code 의 logical representative 설정. HighRateSurgeryPatch 와 같은 3단계.
+        merged code 의 logical representative 설정.
 
-          1. X : F-I (block2) 는 양쪽 다 그대로. F-II (block1) 는 column 별로,
-                 touched pair 는 위 quotient 의 coset leader, untouched 는 그대로.
-          2. 나머지 + Z 전부는 set_missing_logicals() 에 위임.
+          1. X : F-I (block2) 는 Γ1 이 안 건드리므로 모든 블록에서 그대로.
+                 F-II (block1) 는 column tuple 별로, touched 는 quotient 의
+                 coset leader, untouched 는 데이터 코드 것 그대로.
+          2. 나머지 (앤실라 gauge logical 포함) 와 Z 전부는 set_missing_logicals().
           3. minimize=True 면 _minimize_logical_op 으로 weight 최소화.
+             같은 타입 stabilizer 를 곱하는 것이라 symplectic pairing 은 보존된다.
         """
         if self.css is None:
             self.make_css()
-        css, css1, css2 = self.css, self.C1.css, self.C2.css
-        N, n1 = css.n, css1.n
+        css = self.css
+        N = css.n
+        m = len(self.Cs)
+        cssS = [C.css for C in self.Cs]
+        offs, acc = [], 0
+        for cs in cssS:
+            offs.append(acc); acc += cs.n
 
-        pair = {c1_t: (c2_t, g1a, g1b)
-                for _, c1_t, c2_t, (_, g1a, _), (_, g1b, _) in self.columns}
-        touched2 = {c2_t for _, _, c2_t, _, _ in self.columns}
+        # touched column tuple 들
+        tuples = {}                       # c_t^(0) -> (나머지 c 들, g1 리스트)
+        touched = [set() for _ in range(m)]
+        for col in self.columns:
+            q_t, legs = self._legs(col)
+            cts = [c_t for _, c_t, _, _ in legs]
+            g1s = [g1  for _, _, g1, _ in legs]
+            tuples[cts[0]] = (cts, g1s)
+            for j, c in enumerate(cts):
+                touched[j].add(c)
 
         xreps = []
-        # F-I : block2, Gamma1 이 안 건드리므로 양쪽 다 그대로
-        for cs, off in ((css1, 0), (css2, n1)):
+        # F-I : block2 — 모든 블록 그대로
+        for cs, off in zip(cssS, offs):
             Ga = np.asarray(cs.Ca.G, dtype=int) % 2
             pbT = cs.CbT.pivots()
             for p in range(cs.Ca.k):
@@ -1159,38 +924,40 @@ class MergedHighRateSurgeryPatch(ConePatch):
                         v[off + cs.qubit2_idx(i, pbT[q])] = 1
                     xreps.append(v)
 
-        # F-II : block1
-        nb1 = css1.nb
-        for b in range(css1.CaT.k):
-            c1 = css1.CaT.pivots()[b]
-            if c1 not in pair:                              # C1 의 untouched column
-                for r in np.asarray(css1.Cb.G, dtype=int) % 2:
+        # F-II : block1 — touched tuple 은 묶어서, 나머지는 블록별로
+        nbs = [cs.nb for cs in cssS]
+        for b in range(cssS[0].CaT.k):
+            c0 = cssS[0].CaT.pivots()[b]
+            if c0 not in tuples:                              # 블록 0 의 untouched
+                for r in np.asarray(cssS[0].Cb.G, dtype=int) % 2:
                     v = np.zeros(N, dtype=int)
                     for u in np.nonzero(r)[0]:
-                        v[css1.qubit1_idx(c1, u)] = 1
+                        v[offs[0] + cssS[0].qubit1_idx(c0, u)] = 1
                     xreps.append(v)
                 continue
-            c2, g1a, g1b = pair[c1]                         # touched pair
-            for r in self._column_quotient_basis(g1a, g1b):
+            cts, g1s = tuples[c0]
+            for r in self._column_quotient_basis(g1s):
                 v = np.zeros(N, dtype=int)
-                for u in np.nonzero(r[:nb1])[0]:
-                    v[css1.qubit1_idx(c1, u)] = 1
-                for u in np.nonzero(r[nb1:])[0]:
-                    v[n1 + css2.qubit1_idx(c2, u)] = 1
+                lo = 0
+                for j, nbj in enumerate(nbs):
+                    for u in np.nonzero(r[lo:lo+nbj])[0]:
+                        v[offs[j] + cssS[j].qubit1_idx(cts[j], u)] = 1
+                    lo += nbj
                 xreps.append(v)
-        for b in range(css2.CaT.k):                         # C2 의 untouched column
-            c2 = css2.CaT.pivots()[b]
-            if c2 in touched2:
-                continue
-            for r in np.asarray(css2.Cb.G, dtype=int) % 2:
-                v = np.zeros(N, dtype=int)
-                for u in np.nonzero(r)[0]:
-                    v[n1 + css2.qubit1_idx(c2, u)] = 1
-                xreps.append(v)
+        for j in range(1, m):                                 # 나머지 블록의 untouched
+            for b in range(cssS[j].CaT.k):
+                c = cssS[j].CaT.pivots()[b]
+                if c in touched[j]:
+                    continue
+                for r in np.asarray(cssS[j].Cb.G, dtype=int) % 2:
+                    v = np.zeros(N, dtype=int)
+                    for u in np.nonzero(r)[0]:
+                        v[offs[j] + cssS[j].qubit1_idx(c, u)] = 1
+                    xreps.append(v)
 
         assert len(xreps) <= css.k, f"X reps {len(xreps)} > k_merged {css.k}"
         self.n_data_logicals = len(xreps)
-        self.n_gauge_logicals = css.k - len(xreps)          # = k_A
+        self.n_gauge_logicals = css.k - len(xreps)            # = k_A
 
         css.logical_x_repr = [None] * css.k
         css.logical_z_repr = [None] * css.k
@@ -1203,7 +970,14 @@ class MergedHighRateSurgeryPatch(ConePatch):
                 css.logical_x_repr[i] = css._minimize_logical_op("X", css.logical_x_repr[i])
                 css.logical_z_repr[i] = css._minimize_logical_op("Z", css.logical_z_repr[i])
         return self
-    
+
+
+def MergedHighRateSurgeryPatch(C1, C2, A, columns, name="merged-high-rate-surgery"):
+    """두 블록 편의 래퍼.  columns 는 (ia, ic1, ic2, gamma1, gamma2) 형식."""
+    cols = [(ia, [ic1, ic2], [g1, g2]) for ia, ic1, ic2, g1, g2 in columns]
+    return HighRateSurgeryPatch([C1, C2], A, cols, name=name)
+
+
 def build_xx_cone_surface(d: int) -> ConePatch:
     C1 = SurfaceCode(d, patch_name="surf1", offset=(0.0,0.0))
     C2 = SurfaceCode(d, patch_name="surf2", offset=(d,0.0))

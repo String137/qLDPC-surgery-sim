@@ -32,6 +32,7 @@ class ErrorSimulator:
         self.n_qubits    = circ.num_qubits
         self.n_detectors = circ.detector_error_model(decompose_errors=False).num_detectors
         self.n_meas      = circ.num_measurements
+        self._flat       = list(circ.flattened())
 
         self.round_of   = self._build_round_map()
         self.n_rounds   = max(self.round_of.values()) + 1 if self.round_of else 0
@@ -56,7 +57,7 @@ class ErrorSimulator:
         flattened circuit의 각 instruction index -> round 번호.
         TICK을 만날 때마다 round +1. TICK 이전(맨 앞)은 round 0.
         """
-        flat = list(self.circ.flattened())
+        flat = self._flat
         round_of = {}
         r = 0
         for idx, inst in enumerate(flat):
@@ -77,7 +78,7 @@ class ErrorSimulator:
             round      : 해당 instruction의 round 번호 (TICK 카운트)
             mpp_group  : MPP fault일 때 해당 group 문자열 (나머지는 없음)
         """
-        flat = list(self.circ.flattened())
+        flat = self._flat
         fault_list = []
 
         for noisy_idx, inst in enumerate(flat):
@@ -162,7 +163,7 @@ class ErrorSimulator:
         """
         noisy circuit에서 해당 fault만 p=1로, 나머지는 p=0으로 설정해서 효과 계산.
         """
-        flat = list(self.circ.flattened())
+        flat = self._flat
         new_circuit = stim.Circuit()
         target_noisy_idx = fault['noisy_idx']
 
