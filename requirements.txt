@@ -4,8 +4,6 @@ networkx
 matplotlib
 galois
 stim
-ldpc
-sinter
 pulp<3
 docplex
 cplex

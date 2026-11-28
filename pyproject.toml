@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qldpc-surgery-sim"
+version = "0.1.0"
+description = "Surgery on CSS qLDPC codes and Stim circuits for memory and surgery"
+readme = "README.md"
+requires-python = ">=3.10"
+dynamic = ["dependencies"]
+
+[tool.setuptools]
+packages = ["core", "surgery", "analysis", "viz"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
