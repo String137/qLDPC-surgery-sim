@@ -6,7 +6,7 @@ stim circuit 생성시에만 QubitRegistry를 통해 int index로 변환.
 """
 
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Iterable
 import numpy as np
 
@@ -20,10 +20,11 @@ class Qubit:
     """
     patch: 어느 코드 패치에 속하는지 (e.g. "patch1", "seam", "patch2")
     idx:   그 패치 내의 local index
+    local_coord: 그 패치 내의 좌표 (x, y). 없으면 None
     """
     patch_name: str
     idx: int
-    local_coord: tuple[float, float]|None
+    local_coord: tuple[float, float]|None = None
 
     def __repr__(self):
         return f"Q({self.patch_name},{self.idx})"
@@ -39,11 +40,11 @@ class Qubit:
 @dataclass(frozen=True)
 class Check:
     """
-    Pauli type ("X" or "Z") + qubit support.
+    Pauli type ("X", "Z", or "Empty") + qubit support.
     label은 디버깅/시각화용.
     """
     qubits: frozenset[Qubit]
-    pauli: str          # "X" or "Z"
+    pauli: str          # "X", "Z", or "Empty"
     label: str = ""
 
     def __post_init__(self):
@@ -87,9 +88,9 @@ class QubitRegistry:
 
     사용법:
         reg = QubitRegistry()
-        reg.register(patch1.all_qubits(), prefix="patch1")
+        reg.register(patch1.data_qubits())
         reg.register(seam_qubits)
-        reg.register(patch2.all_qubits(), prefix="patch2")
+        reg.register(patch2.data_qubits())
 
         idx = reg[qubit]          # Qubit → int
         q   = reg.qubit(idx)      # int → Qubit

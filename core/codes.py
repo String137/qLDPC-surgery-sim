@@ -1,5 +1,5 @@
 """
-codes.py — CodePatch interface + RotatedSurfaceCode + BBCode adapter
+codes.py — CodePatch interface + 구현체 (Surface, RotatedSurface, HGP, LP, BB, Trivial, Empty, AncillaGraph)
 
 CodePatch는 Qubit/Check 레벨에서 코드를 기술.
 stim circuit 생성, surgery, decoding은 모두 이 인터페이스만 사용.
@@ -13,9 +13,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 import numpy as np
 from core.primitives import Qubit, Check, QubitRegistry
-from docplex.mp.model import Model
-from docplex.mp.progress import ProgressClock
-from core.CSS import CSS, LPCode, RotatedSurfaceCode, HGPCode
+from core.CSS import CSS, LPCode, HGPCode
 import galois
 import networkx as nx
 from collections import deque
@@ -30,7 +28,6 @@ class CodePatch(ABC):
         self._data_qubits = None
         self.check2coord = None
         
-    @property
     @abstractmethod
     def name(self) -> str: ...
 
@@ -43,8 +40,8 @@ class CodePatch(ABC):
     @abstractmethod
     def z_checks(self) -> list[Check]: ...
 
-    @abstractmethod
-    def local_coord(self, q: Qubit) -> tuple[float, float]: ...
+    def local_coord(self, q: Qubit) -> tuple[float, float] | None:
+        return q.local_coord
 
     def set_css(self, css: CSS):
         self.css = css
@@ -57,7 +54,7 @@ class CodePatch(ABC):
         for i in range(css.Hz.shape[0]):
             support = frozenset(self._data_qubits[j] for j in range(css.n) if css.Hz[i, j] == 1)
             self._z_checks.append(Check(support, "Z", f"Z_{i}"))
-        if css.logical_x_repr is not None and css.logical_z_repr is not None:
+        if all(l is not None for l in css.logical_x_repr + css.logical_z_repr):
             self.set_logicals(css.logical_x_repr, css.logical_z_repr)
 
 
@@ -66,19 +63,13 @@ class CodePatch(ABC):
                             for i in range(self.css.k)]
         self._z_logicals = [frozenset(self._data_qubits[j] for j in range(self.css.n) if lz[i][j] == 1)
                             for i in range(self.css.k)]
-    # @abstractmethod
-    # def x_logicals(self) -> list[frozenset[Qubit]]: ...
-
-    # @abstractmethod
-    # def z_logicals(self) -> list[frozenset[Qubit]]: ...
-
     # logical operators는 직접 구현하자.
     # check 만족하는 operator 찾으면 되고, 원하는 logical operator를 고정시키고, 남은 operator를 찾는 부분도 만들자.
     def get_logical_representative(self, type: str = "X", idx: int = 0) -> list[Qubit]:
         if self.css is None:
             self.make_css()
-        if self.css.logical_x_repr is None or self.css.logical_z_repr is None:
-            self.css.calc_logical_representatives()
+        if any(l is None for l in self.css.logical_x_repr + self.css.logical_z_repr):
+            self.css.set_missing_logicals()
         # self.logical_x_repr는 list[Qubit] type이 아니라 0,1들 list임.
         # list[Qubit]을 리턴해야함!!
         if type == "X":
@@ -144,7 +135,7 @@ class CodePatch(ABC):
     def add_qubit(self, x, y) -> Qubit:
         # qubit 추가 (data qubits에 추가)
         # check 업데이트는 외부에서 직접 해줘야 함.
-        self._data_qubits.append(Qubit(self.name, len(self._data_qubits), (x, y)))
+        self._data_qubits.append(Qubit(self.name(), len(self._data_qubits), (x, y)))
         return self._data_qubits[-1]
     
     def add_check(self, qubits: list[Qubit], pauli: str, label: str = "") -> Check:
@@ -174,7 +165,6 @@ class EmptyPatch(CodePatch):
         self._x_checks = []
         self._z_checks = []
 
-    @property
     def name(self) -> str:
         return self._name
 
@@ -194,12 +184,12 @@ class SurfaceCode(CodePatch):
     # (x,y) = (n,m), where n,m is half integer, and n+m is an integer, and 0 <= n,m <= d-1
 
     def __init__(self, d: int, patch_name: str = "surf", offset=(0.0, 0.0)):
+        super().__init__(offset)
         self.d = d
         self._name = patch_name
         self._offset = offset
         self._build()
     
-    @property
     def name(self) -> str:
         return self._name
     
@@ -231,9 +221,6 @@ class SurfaceCode(CodePatch):
             y += 0.5
         return (x, y)
     
-    def local_coord(self, q):
-        return q.local_coord
-
     def _get_qubit_from_idx(self, idx: int) -> Qubit:
         # idx로부터 Qubit 객체 반환
         return self._data_qubits[idx]  # 이미 생성된 qubit 객체 반환
@@ -285,6 +272,7 @@ class SurfaceCode(CodePatch):
 
 class RotatedSurfaceCodePatch(CodePatch):
     def __init__(self, css: CSS, patch_name: str = "rot_surf", offset=(0.0, 0.0), scale=(1,1)):
+        super().__init__(offset)
         self._name = patch_name
         self.d = css.d
         self.set_css(css)
@@ -320,6 +308,7 @@ class TrivialCode(CodePatch):
     """
     
     def __init__(self, n: int, patch_name: str = "trivial", offset=(0.0, 0.0), direction: str = "vertical"):
+        super().__init__(offset)
         self.n = n
         self._name = patch_name
         self._offset = offset
@@ -331,7 +320,6 @@ class TrivialCode(CodePatch):
         else:
             raise ValueError("direction must be 'vertical' or 'horizontal'")
     
-    @property
     def name(self) -> str:
         return self._name
     
@@ -460,7 +448,7 @@ class CCCode(CodePatch):
     pass
 
 # ---------------------------------------------------------------------------
-# BBCode adapter (네 기존 코드에서 가져옴)
+# BBCode adapter
 # ---------------------------------------------------------------------------
 
 class BBCodePatch(CodePatch):
@@ -473,13 +461,14 @@ class BBCodePatch(CodePatch):
         """
         bb: 기존 BBCode 인스턴스
         """
+        super().__init__()
         self._bb = bb
         self._name = patch_name
         n = bb.n
         self._data_qubits = [Qubit(patch_name, i) for i in range(n)]
         self._x_checks = self._matrix_to_checks(bb.Hx, "X")
         self._z_checks = self._matrix_to_checks(bb.Hz, "Z")
-        # logicals은 get_logical_representatives() 이후에 채워짐
+        # logicals은 load_logicals() 이후에 채워짐
         self._x_logicals: list[frozenset[Qubit]] = []
         self._z_logicals: list[frozenset[Qubit]] = []
 
@@ -494,8 +483,8 @@ class BBCodePatch(CodePatch):
         return checks
 
     def load_logicals(self):
-        """BBCode.get_logical_representatives() 호출 후 실행."""
-        self._bb.get_logical_representatives()
+        """BBCode.set_missing_logicals()로 logical을 채운 뒤 Qubit 집합으로 변환."""
+        self._bb.set_missing_logicals()
         lx = np.array(self._bb.logical_x_repr, dtype=np.uint8)
         lz = np.array(self._bb.logical_z_repr, dtype=np.uint8)
         self._x_logicals = [
@@ -507,7 +496,6 @@ class BBCodePatch(CodePatch):
             for row in lz
         ]
 
-    @property
     def name(self): return self._name
     def data_qubits(self): return self._data_qubits
     def x_checks(self): return self._x_checks
@@ -550,7 +538,6 @@ class AncillaGraph(CodePatch):
 
             # cycle basis에 해당하는게 z check
             cb = self.cycle_edge_basis()
-            # print("cb: ",cb)
             for cycle in cb:
                 support = frozenset([self._data_qubits[edge] for edge in cycle])
                 self._z_checks.append(Check(support, "Z", f"Z_cycle_{cycle}"))

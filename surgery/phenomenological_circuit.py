@@ -1,8 +1,5 @@
-import stim
-from collections import defaultdict
 from core.primitives import *
 from core.codes import *
-import numpy as np
 from surgery.circuit import *
 from surgery.surgery import MergedCodeWithGraph, HighRateSurgeryPatch
 
@@ -61,7 +58,14 @@ class MemoryCircuitScheduler:
             Instruction(tick, "MX", data_qubits, gate_args=[0], label="final_data")
         )
 
-        # extra_detectors 없음 — add_detectors가 자동으로 연속 check 비교 detector 추가
+        # 연속 check 비교 detector는 add_detectors가 자동으로 추가
+        # 마지막 MX 결과로 X check를 다시 만들어서 마지막 round와 비교
+        final_tick = tick            # MX 넣은 tick
+        last_round_tick = tick - 1   # 마지막 noisy MPP tick
+        for chk in x_checks:
+            schedule.extra_detectors.append(
+                [(last_round_tick, chk)] + [(final_tick, q) for q in chk.qubits]
+            )
 
         schedule.qubit_coords = {q: self.patch.local_coord(q) for q in data_qubits}
         return schedule
@@ -144,6 +148,7 @@ class SurgeryCircuitScheduler:
     """
 
     def __init__(self, merged: MergedCodeWithGraph, pre_round: int, merge_round: int, post_round: int, p_data: float, p_meas: float):
+        assert post_round >= 1, "split detector가 post 첫 round의 Z check를 쓰므로 post_round >= 1 이어야 함"
         self.merged = merged
         self.C1 = merged.C1
         self.C2 = merged.C2
@@ -239,7 +244,6 @@ class SurgeryCircuitScheduler:
         schedule.instructions[tick].append(
             Instruction(tick, "M", a_data_qubits, gate_args=[self.p_meas], label="split")
         )
-        # tick += 1 
         # split -> post 넘어갈 때는 tick 안넘어가야함.
 
         # post-rounds: C1, C2 각자 EC
@@ -262,12 +266,20 @@ class SurgeryCircuitScheduler:
             Instruction(tick, "MX", c_data_qubits, gate_args=[0], label="final_data")
         )
 
+        # final detector: 마지막 MX 결과로 C1, C2 X check를 다시 만들어서 마지막으로 잰 round와 비교
+        final_tick = tick
+        last_round_tick = tick - 1
+        for chk in c1_x_checks + c2_x_checks:
+            schedule.extra_detectors.append(
+                [(last_round_tick, chk)] + [(final_tick, q) for q in chk.qubits]
+            )
+
         # tick 계산
         pre_last_tick = 1 + self.pre_round
         merge_first_tick = 1 + self.pre_round + 1
         merge_last_tick = 1 + self.pre_round + self.merge_round
         split_tick = 1 + self.pre_round + self.merge_round + 1
-        post_first_tick = 1 + self.pre_round + self.merge_round + 2
+        post_first_tick = split_tick   # split이랑 post 첫 round는 같은 tick
 
         # extra_detectors 1: pre → merge Z check 경계
         # f0[i].weight() > 0인 경우만 deformed된 Z check
@@ -279,10 +291,6 @@ class SurgeryCircuitScheduler:
                     (pre_last_tick, original_z),
                     (merge_first_tick, deformed_z),
                 ])
-                # print([
-                #     (pre_last_tick, original_z),
-                #     (merge_first_tick, deformed_z),
-                # ])
 
         # extra_detectors 2: split detector (merge → post Z check 경계)
         # deformed Z check XOR ancilla qubit MZ XOR post 첫 round Z check == 0
@@ -342,6 +350,7 @@ class HighRateSurgeryCircuitScheduler:
 
     def __init__(self, S: HighRateSurgeryPatch, pre_round: int, merge_round: int,
                  post_round: int, p_data: float, p_meas: float):
+        assert post_round >= 1, "split detector가 post 첫 round의 Z check를 쓰므로 post_round >= 1 이어야 함"
         self.S = S
         self.Cs = S.Cs
         self.A = S.A
@@ -419,6 +428,14 @@ class HighRateSurgeryCircuitScheduler:
         # final: noiseless MX of the data qubits
         schedule.instructions[tick].append(
             Instruction(tick, "MX", c_data_qubits, gate_args=[0], label="final_data"))
+
+        # final detector: 마지막 MX 결과로 data block X check를 다시 만들어서 마지막으로 잰 round와 비교
+        final_tick = tick
+        last_round_tick = tick - 1
+        for chk in c_x_checks:
+            schedule.extra_detectors.append(
+                [(last_round_tick, chk)] + [(final_tick, q) for q in chk.qubits]
+            )
 
         pre_last_tick = 1 + self.pre_round
         merge_first_tick = 1 + self.pre_round + 1

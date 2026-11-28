@@ -1,20 +1,15 @@
 """
-surgery.py — MergedPatch, seam construction, stim circuit assembly
+surgery.py — 코드 패치 merge (MergedPatch, DirectSum, ConePatch, MergedCodeWithGraph, HighRateSurgeryPatch)
 
-핵심 설계:
-    - Seam은 새로운 Qubit("seam", i) 객체들로 기술
-    - MergedPatch는 세 개의 qubit set (patch1, seam, patch2)을 가짐
-    - global QubitRegistry는 MergedPatch가 만들고 외부에 노출
-    - stim circuit은 이 registry 기준으로 생성됨
+ConePatch: homological measurement용 cone code. 데이터 블록 + ancilla.
+MergedCodeWithGraph: AncillaGraph로 두 패치를 이어서 XX 측정.
+HighRateSurgeryPatch: HGP 데이터 블록 + HGP ancilla, Homomorphism으로 연결.
 """
 
 from __future__ import annotations
-from dataclasses import dataclass
 import numpy as np
-from core.CSS import LinearCode
 from core.primitives import Qubit, Check, QubitRegistry
 from core.codes import *
-from docplex.mp.model import Model
 import itertools
 
 
@@ -77,7 +72,6 @@ class MergedPatch(CodePatch):
         self._registry.register(seam_data_qubits)
         self._registry.register(patch2.data_qubits())
 
-    @property
     def name(self): return self._name
 
     def data_qubits(self) -> list[Qubit]:
@@ -118,7 +112,6 @@ class DirectSum(CodePatch):
         self._registry.register(patch1.data_qubits())
         self._registry.register(patch2.data_qubits())
 
-    @property
     def name(self): return self._name
 
     def data_qubits(self) -> list[Qubit]:
@@ -151,7 +144,7 @@ class ConePatch(CodePatch):
 
     데이터 블록은 **리스트** 로 받는다.  Cs = [C_1, ..., C_m] 이고
     C = C_1 ⊕ ... ⊕ C_m 로 취급한다.  m=1 이면 단일 블록 surgery,
-    m=2 면 두 블록 merge.  (예전의 _ConePatch / ConePatch 를 통합한 것.)
+    m=2 면 두 블록 merge.
 
     입력:
         Cs   : list[CodePatch]  — 데이터 블록들
@@ -227,7 +220,6 @@ class ConePatch(CodePatch):
         assert len(self.Cs) >= 2, "블록이 하나뿐이다."
         return self.Cs[1]
 
-    @property
     def name(self) -> str: return self._name
 
     def data_qubits(self) -> list[Qubit]: return self._data_qubits
@@ -283,16 +275,9 @@ class ConePatch(CodePatch):
         raise NotImplementedError
 
 
-class _ConePatch(ConePatch):
-    """DEPRECATED. ConePatch 가 데이터 블록 리스트를 받게 일반화되면서 흡수됨.
-    _ConePatch(C, A, f1t, f0) == ConePatch([C], A, f1t, f0)."""
-    def __init__(self, C, A, f1t, f0, name: str = "cone"):
-        super().__init__([C], A, f1t, f0, name=name)
-
-
 class MergedCodeWithGraph(ConePatch):
-    """ 
-    Codepatch C1, C2를 AncillaGraph를 통해 merge.
+    r""" 
+    Codepatch C1, C2를 AncillaGraph를 통해 merge. (Swaroop, Jochym-O'Connor, Yoder, arXiv:2410.03628; Williamson, Yoder, arXiv:2410.02213)
     일단 logical XX 측정만 구현
     C1, C2의 logical X operator들의 support가 port function을 통해 graph의 vertex(X-check)로 injective하게 mapping(각 codeblock 내에서의 injective)
     edge(ancilla qubit)가 C1, C2의 Z-check의 support에 추가되는데, codeblock Ci의 Z-check s에 대해 logical X operator의 support와 overlap하는 qubit들을 L_s라고 하자.
@@ -312,33 +297,16 @@ class MergedCodeWithGraph(ConePatch):
         name: str = "merged-graph",
     ):
         self._name = name
-        self.C1 = C1
-        self.C2 = C2
         self.anc_graph = anc_graph
         self.X1 = X1
         self.X2 = X2
         self.direct_sum = DirectSum(C1, C2)
 
-        # # qubit register
-        # c_qubits = self.direct_sum.data_qubits()
-        # a_qubits = self.anc_graph.data_qubits()
-        # self._data_qubits = c_qubits + a_qubits
-
-        # self._registry = QubitRegistry()
-        # self._registry.register(c_qubits)
-        # self._registry.register(a_qubits)
-
-        # self.patch_name_dict = {
-        #     C1.name: C1,
-        #     C2.name: C2,
-        #     anc_graph.name: anc_graph
-        # }
-
         # port function
 
         assert max(len(X1), len(X2)) <= len(anc_graph.x_checks())   # for injectivity condition
 
-        if port_func == None:
+        if port_func is None:
             self.port_func = {}
             # Qubit -> check idx 매핑
             for i, q in enumerate(X1):
@@ -385,10 +353,9 @@ class MergedCodeWithGraph(ConePatch):
                     q_edge = anc_graph.edge_index[edge]
                     f0[i] += Check(frozenset([anc_graph.data_qubits()[q_edge]]), "Z")
 
-        super().__init__(C1, C2, anc_graph, f1t, f0, name)
+        super().__init__([C1, C2], anc_graph, f1t, f0, name)
                 
     
-    @property
     def name(self) -> str: return self._name
     def data_qubits(self) -> list[Qubit]: return self._data_qubits
     def x_checks(self)   -> list[Check]:  return self._x_checks
@@ -403,14 +370,7 @@ class MergedCodeWithGraph(ConePatch):
             "self.css.logical_z_repr 를 쓸 것.")
     def make_registry(self) -> QubitRegistry: return self._registry
 
-    # def local_coord(self, q: Qubit) -> tuple[float, float]:
-    #     # ConePatch에서의 local_coord
-    #     lx, ly = q._local_coord()
-    #     ox, oy = self.patch_name_dict[q.patch_name]._offset
-    #     return lx + ox, ly + oy
 
-    # def get_idx(self, q: Qubit) -> int:
-    #     return self._registry[q]
 def _v(x):
     return "".join(str(int(b)) for b in np.asarray(x, dtype=int))
  
@@ -976,201 +936,3 @@ def MergedHighRateSurgeryPatch(C1, C2, A, columns, name="merged-high-rate-surger
     """두 블록 편의 래퍼.  columns 는 (ia, ic1, ic2, gamma1, gamma2) 형식."""
     cols = [(ia, [ic1, ic2], [g1, g2]) for ia, ic1, ic2, g1, g2 in columns]
     return HighRateSurgeryPatch([C1, C2], A, cols, name=name)
-
-
-def build_xx_cone_surface(d: int) -> ConePatch:
-    C1 = SurfaceCode(d, patch_name="surf1", offset=(0.0,0.0))
-    C2 = SurfaceCode(d, patch_name="surf2", offset=(d,0.0))
-    A  = EmptyPatch(patch_name="ancilla", offset=(d-0.5,0.5))
-
-    for i in range(d-1):
-        A.add_qubit(0, i)
-    A.add_check([A.data_qubits()[0]], "X")
-    for i in range(1,d-1):
-        A.add_check([A.data_qubits()[i-1], A.data_qubits()[i]], "X")
-    A.add_check([A.data_qubits()[d-2]], "X")
-
-    f0 = [Check.get_empty_check()]*len(C1.z_checks()+C2.z_checks())
-    for i in range(d-1):
-        f0[i*d + (d-1)] = Check(frozenset([A.data_qubits()[i]]), "Z")
-    for i in range(d-1):
-        f0[len(C1.z_checks()) + i*d] = Check(frozenset([A.data_qubits()[i]]), "Z")
-    
-    f1t = [Check.get_empty_check()]*len(A.x_checks())
-    for i in range(d):
-        f1t[i] = Check(frozenset([C1._get_qubit_from_coord(d-1,i), C2._get_qubit_from_coord(0,i)]), "X")
-    
-
-    return ConePatch(C1, C2, A, f1t, f0, name="xx-cone-surface")
-
-
-# ---------------------------------------------------------------------------
-# ZZ surgery 용 ConePatch builder
-# ---------------------------------------------------------------------------
-
-def build_zz_cone(
-    C1: CodePatch,
-    C2: CodePatch,
-    A: CodePatch,
-    f1: np.ndarray,
-    f0: np.ndarray,
-    delta1: np.ndarray,
-    delta0: np.ndarray | None = None,
-) -> ConePatch:
-    """
-    f1, f0, delta1, delta0 를 직접 받아 ConePatch 생성.
-    자동 계산이 필요하면 compute_zz_cone_maps() 사용.
-    """
-    return ConePatch(C1, C2, A, f1, f0, delta1, delta0, name="ZZ-cone")
-
-
-def compute_zz_cone_maps(
-    C1: CodePatch,
-    C2: CodePatch,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """
-    ZZ surgery 에 필요한 f1, f0, delta1, delta0 자동 계산.
-    논문 eq.35, 47, 48 → Algorithm 1 → Algorithm 2 순서.
-    Returns: (f1, f0, delta1, delta0)
-    """
-    c1_qubits = C1.data_qubits()
-    c2_qubits = C2.data_qubits()
-    n1 = len(c1_qubits)
-    n2 = len(c2_qubits)
-    n  = n1 + n2
-
-    reg1 = C1.make_registry()
-    reg2 = C2.make_registry()
-
-    Hz1 = C1.h_z(reg1)
-    Hz2 = C2.h_z(reg2)
-    nZ1, nZ2 = Hz1.shape[0], Hz2.shape[0]
-    nZ = nZ1 + nZ2
-
-    Hz = np.zeros((nZ, n), dtype=np.uint8)
-    Hz[:nZ1, :n1] = Hz1
-    Hz[nZ1:, n1:] = Hz2
-
-    xl1 = C1.x_logicals()[0]
-    xl2 = C2.x_logicals()[0]
-    Q_indices = (
-        sorted(reg1[q] for q in xl1) +
-        sorted(n1 + reg2[q] for q in xl2)
-    )
-    w = len(Q_indices)
-
-    # f1: eq.35
-    f1 = np.zeros((n, w), dtype=np.uint8)
-    for j, i in enumerate(Q_indices):
-        f1[i, j] = 1
-
-    # delta1*, f0*: eq.47, 48
-    Hz_Q = Hz[:, Q_indices]
-    nonzero_rows = [i for i in range(nZ) if Hz_Q[i].any()]
-    n0Z = len(nonzero_rows)
-
-    delta1 = Hz_Q[nonzero_rows, :]
-
-    f0 = np.zeros((nZ, n0Z), dtype=np.uint8)
-    for j, i in enumerate(nonzero_rows):
-        f0[i, j] = 1
-
-    # Algorithm 1
-    delta1 = _algorithm1(delta1)
-
-    n_new_edges = delta1.shape[0] - n0Z
-    if n_new_edges > 0:
-        f0 = np.hstack([f0, np.zeros((nZ, n_new_edges), dtype=np.uint8)])
-
-    # Algorithm 2
-    delta0 = _algorithm2(delta1, Hz, f0)
-
-    return f1, f0, delta1, delta0
-
-
-def _algorithm1(delta1: np.ndarray) -> np.ndarray:
-    """Cheeger constant >= 1 이 될 때까지 edge 추가."""
-    delta1 = delta1.copy()
-    while True:
-        h, S = _cheeger_constant(delta1)
-        if h >= 1:
-            break
-        w = delta1.shape[1]
-        Sc = [v for v in range(w) if v not in S]
-        deg = delta1.sum(axis=0)
-        best_h = -1
-        best_edge = None
-        for v1 in sorted(S, key=lambda v: deg[v]):
-            for v2 in sorted(Sc, key=lambda v: deg[v]):
-                new_row = np.zeros(w, dtype=np.uint8)
-                new_row[v1] = 1
-                new_row[v2] = 1
-                candidate = np.vstack([delta1, new_row])
-                h_new, _ = _cheeger_constant(candidate)
-                if h_new > best_h:
-                    best_h = h_new
-                    best_edge = new_row
-                    if h_new >= 1:
-                        break
-            if best_h >= 1:
-                break
-        delta1 = np.vstack([delta1, best_edge])
-    return delta1
-
-
-def _cheeger_constant(delta1: np.ndarray) -> tuple[float, list[int]]:
-    from itertools import combinations
-    w = delta1.shape[1]
-    best_h = float('inf')
-    best_S = []
-    for size in range(1, w // 2 + 1):
-        for S in combinations(range(w), size):
-            S_set = set(S)
-            boundary = 0
-            for row in delta1:
-                support = set(np.where(row)[0])
-                if len(support & S_set) % 2 == 1:
-                    boundary += 1
-            h = boundary / len(S)
-            if h < best_h:
-                best_h = h
-                best_S = list(S)
-    return best_h, best_S
-
-
-def _algorithm2(
-    delta1: np.ndarray,
-    Hz: np.ndarray,
-    f0: np.ndarray,
-) -> np.ndarray:
-    """cycle basis (∂0) 계산. ker delta0 ≅ im delta1."""
-    n0Z = delta1.shape[0]
-    cycle_basis = _f2_null_space(delta1.T)
-    if cycle_basis.shape[0] == 0:
-        return np.zeros((0, n0Z), dtype=np.uint8)
-    return cycle_basis.astype(np.uint8)
-
-
-def _f2_null_space(M: np.ndarray) -> np.ndarray:
-    """F2 위에서 M 의 null space basis (rows = basis vectors)."""
-    M = M.copy().astype(np.uint8) % 2
-    m, n = M.shape
-    aug = np.hstack([M, np.eye(n, dtype=np.uint8)])
-    pivot_cols = []
-    row = 0
-    for col in range(m):
-        pivot = None
-        for r in range(row, n):
-            if aug[r, col]:
-                pivot = r
-                break
-        if pivot is None:
-            continue
-        aug[[row, pivot]] = aug[[pivot, row]]
-        for r in range(n):
-            if r != row and aug[r, col]:
-                aug[r] = (aug[r] + aug[row]) % 2
-        pivot_cols.append(col)
-        row += 1
-    null_basis = aug[len(pivot_cols):, m:]
-    return null_basis % 2

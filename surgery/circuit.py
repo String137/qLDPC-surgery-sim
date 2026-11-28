@@ -34,8 +34,7 @@ class CircuitBuilder:
     def __init__(self, schedule: CircuitSchedule):
         self.meas_record = {}  # global_meas_idx -> {tick, gate, qubits, label, check}
         self._circuit = stim.Circuit()
-        self._qubit_idx = schedule.qubit_idxs # 이거 이상함. 알파벳 순서임.
-        # merged code에서의 global(local) idx가 필요. merged code를 넘겨줘야하나..? 
+        self._qubit_idx = schedule.qubit_idxs
         self._schedule = schedule
 
     @property
@@ -46,7 +45,6 @@ class CircuitBuilder:
         if self._schedule.qubit_coords:
             for q, (x, y) in self._schedule.qubit_coords.items():
                 idx = self._qubit_idx[q]
-                # print(q,idx)
                 self._circuit.append("QUBIT_COORDS", [idx], [x, y])
 
         for tick in sorted(self._schedule.instructions.keys()):
@@ -120,21 +118,18 @@ class CircuitBuilder:
 
     def add_detectors(self):
         # 같은 check 객체가 연속으로 측정된 경우 자동으로 detector 추가
-        
+
         check_to_meas = defaultdict(list)
         for idx, entry in self.meas_record.items():
             if entry['check'] is not None:
                 check_to_meas[entry['check']].append((entry['tick'], idx))
-        
+
         for check, meas_list in check_to_meas.items():
-
             meas_list.sort()
-
-                
             for i in range(1, len(meas_list)):
                 tick_cur, cur_idx = meas_list[i]
                 tick_prev, prev_idx = meas_list[i-1]
-                
+
                 if tick_cur - tick_prev != 1:
                     continue
                 # prev MPP meas가 p=0이라면 cur 단독으로 추가하는 로직 필요.
@@ -154,10 +149,7 @@ class CircuitBuilder:
                     idxs = self.get_meas_idx(tick=tick, qubit=target)
                 recs += [stim.target_rec(idx - len(self.meas_record)) for idx in idxs]
             self._circuit.append('DETECTOR', recs)
-            
 
-
-            
     def add_observables(self, supports: list[list[Qubit]]):
         final_data_idxs = self.get_meas_idx(label='final_data')
         qubit_to_final_idx = {self.meas_record[idx]['qubits'][0]: idx for idx in final_data_idxs}
@@ -168,7 +160,7 @@ class CircuitBuilder:
                 for q in support
             ]
             self._circuit.append('OBSERVABLE_INCLUDE', obs_recs, obs_idx)
-    
+
     def explain_detectors(self):
         total = len(self.meas_record)
         for inst in self._circuit:

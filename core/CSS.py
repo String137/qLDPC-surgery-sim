@@ -1,16 +1,8 @@
 import numpy as np
 import galois
-import stim
-from ldpc import BpOsdDecoder
-from itertools import product
 import re
 from docplex.mp.model import Model
-from docplex.mp.progress import ProgressClock
-import cplex
-import networkx as nx
-import matplotlib.pyplot as plt
-from itertools import combinations
-from sympy import Poly, symbols
+from sympy import Poly
 
 def solve_gf2(A: galois.FieldArray, b: galois.FieldArray):
     """
@@ -76,10 +68,6 @@ class CSS:
         max_check_weight_z = max([np.sum(np.asarray(row)) for row in self.Hz])
         max_qubit_degree_x = max([np.sum(np.asarray(self.Hx[:,i])) for i in range(self.n)])
         max_qubit_degree_z = max([np.sum(np.asarray(self.Hz[:,i])) for i in range(self.n)])
-        print("Max check weight X:", max_check_weight_x)
-        print("Max check weight Z:", max_check_weight_z)
-        print("Max qubit degree X:", max_qubit_degree_x)
-        print("Max qubit degree Z:", max_qubit_degree_z)
         return max(max_check_weight_x, max_check_weight_z), max(max_qubit_degree_x, max_qubit_degree_z)
     def calculate_k(self,):
         rank_x = np.linalg.matrix_rank(self.Hx)
@@ -93,10 +81,8 @@ class CSS:
         """
         # G_opp와 commute하는 space의 basis
         ker_opp = G_opp.null_space()
-        # print("ker rank:",np.linalg.matrix_rank(ker_opp))
         # basis of G_self
         basis_self = G_self.row_space()
-        # print("rank:",np.linalg.matrix_rank(basis_self))
         logicals = []
         current_span = basis_self
         # ker 원소 중 Gauge 기저와 독립적인 것들만 선별 (Stacking Trick)
@@ -177,7 +163,6 @@ class CSS:
 
     def _set_missing_logical(self, typ:str, idx:int):
         # dual logical operator가 None이라면 dual check와 commute하고 primal check의 span에 안들어가는 것 찾음.
-        # print(f"set logical {typ} {idx}")
         if typ == "X":
             G_opp = self.Gz
             G_self = self.Gx
@@ -204,15 +189,12 @@ class CSS:
         
         # Ax=b 의 nullspace의 basis중에 G_self의 row space에 없는 것 찾기 (반드시 존재함)
         x_part, x_null = solve_gf2(A, b)
-        # print("x_part: ", x_part)
-        # print("x_null: ", x_null)
         # x_part는 row vector
         # x_null의 행이 해
         for row in x_null:
             x = x_part + row
             # G_self의 row space에 없는지 확인
             if np.linalg.matrix_rank(self.F(np.vstack((G_self, x)))) == np.linalg.matrix_rank(self.F(G_self)) + 1:
-                # print("Found missing logical operator:", x)
                 if typ == "X":
                     self.logical_x_repr[idx] = self.F(x)
                 elif typ == "Z":
@@ -242,17 +224,6 @@ class CSS:
                 else:
                     assert comm == 0, f"Logical X_{i} and Z_{j} should commute."
 
-    def calc_logical_representatives(self,):
-        # logical X, Z commutation relation 만족하지 않을 수 있음
-        # distance 계산에만 유효
-        if self.logical_x_repr is None:
-            # Lx = Ker(Gz) / Rowspace(Gx)
-            self.logical_x_repr = self._extract_quotient_basis(self.Gz, self.Gx)
-        if self.logical_z_repr is None:
-            # Lz = Ker(Gx) / Rowspace(Gz)
-            self.logical_z_repr = self._extract_quotient_basis(self.Gx, self.Gz)
-    
-    
     def _minimize_logical_op(self, l_type, support: galois.FieldArray):
         # l_type, support를 가지는 logical operator를 같은 type check곱해서 weight 최소화
         if l_type == "X":
@@ -280,7 +251,6 @@ class CSS:
         model.minimize(model.sum(y))
 
         sol = model.solve()
-        print(sol.solve_details.status)
         if sol:
             result = np.array([int(sol.get_value(y[j])) for j in range(n)])
             return galois.GF(2)(result)
@@ -304,12 +274,11 @@ class CSS:
 
         assert anti_logic_ops is not None and all(v is not None for v in anti_logic_ops), (
             f"logical_{'z' if l_type=='X' else 'x'}_repr 에 None 이 있음. "
-            "calc_logical_representatives() 또는 set_missing_logicals() 를 먼저 호출할 것.")
+            "set_missing_logicals() 를 먼저 호출할 것.")
 
         model = Model(name="css_distance")
         e = model.binary_var_list(self.n, name='e')
         s = model.binary_var_list(self.k, name='s') # s_i: Z_i와 anti-commute하는지
-        c = model.binary_var_list(self.n, name='c')
 
         z_comm = [model.integer_var(lb=0, ub=int(np.sum(np.asarray(G_opp[j])) // 2), name=f'z_comm_{j}') for j in range(G_opp.shape[0])]
         z_coset = [model.integer_var(lb=0, ub=int(np.sum(np.asarray(anti_logic_ops[j])) // 2), name=f'z_coset_{j}') for j in range(self.k)]
@@ -346,10 +315,8 @@ class CSS:
 
 
     def calculate_distance(self,):
-        self.calc_logical_representatives()
+        self.set_missing_logicals()
         self.calculate_k()
-        # print(self.logical_x_repr)
-        # print(self.logical_z_repr)
         self.dx = self._find_min_op_weight("X")
         self.dz = self._find_min_op_weight("Z")
         self.d = min(self.dx,self.dz)
@@ -575,7 +542,7 @@ class HGPCode(CSS):
                 self.set_logical_representative("Z", m, z.flatten())
  
 class LPCode(CSS):
-    """
+    r"""
         H_XR = [H_a\otimes_R I | I \otimes_R H_b]
         H_ZR = [I \otimes_R H_b* | H_a* \otimes_R I]
 
@@ -598,8 +565,6 @@ class LPCode(CSS):
 
         H_XR = self.hstack_ring(self.kron_ring(Ha, self.eye_ring(b0)), self.kron_ring(self.eye_ring(a0), Hb))
         H_ZR = self.hstack_ring(self.kron_ring(self.eye_ring(a1), self.conj(Hb)), self.kron_ring(self.conj(Ha), self.eye_ring(b1)))    
-        # LPCode.print_ring_matrix(H_XR)
-        # LPCode.print_ring_matrix(H_ZR)
         self.Hx = self.to_binary(H_XR)
         self.Hz = self.to_binary(H_ZR)
 
@@ -615,13 +580,6 @@ class LPCode(CSS):
     def poly_mul(self, a: Poly, b: Poly) -> Poly:
         return self.poly_mod(Poly(a * b, self.x, modulus=2))
 
-    # def poly_conj(self, a: Poly) -> Poly:
-    #     """conjugate: x^i -> x^{l-i} mod R"""
-    #     result = Poly(0, self.x, modulus=2)
-    #     for monom, coeff in zip(a.monoms(), a.coeffs()):
-    #         i = monom[0]
-    #         result = Poly(result + coeff * self.x**(self.l - i), self.x, modulus=2)
-    #     return self.poly_mod(result)
     def poly_conj(self, a: Poly) -> Poly:
         """conjugate: x^i -> x^{p-i mod p}"""
         coeffs = {}
@@ -816,189 +774,3 @@ class BBCode(CSS):
         idx = (row_idx + x_pow*self.m)%(self.l*self.m)
         idx = (idx//self.m)*self.m + (idx + y_pow)%self.m
         return idx
-
-
-
-def cheeger_constant(G):
-    """
-    작은 그래프용 정확한 Cheeger constant 계산
-    h(G) = min |cut(S, V-S)| / |S|
-    """
-    n = len(G.nodes)
-    if n < 2: return 0
-
-    nodes = list(G.nodes)
-    min_h = float('inf')
-
-    # 노드 수의 절반까지 모든 조합 탐색
-    for r in range(1, n // 2 + 1):
-        for S in combinations(nodes, r):
-            # nx.cut_size는 S와 V-S 사이의 간선 수를 반환 (|dS|)
-            cut_val = nx.cut_size(G, S)
-            h_S = cut_val / r
-            if h_S < min_h:
-                min_h = h_S
-
-    return min_h
-
-class MergedCode(CSS):
-    def __init__(self, C1: BBCode, C2: BBCode):
-        self.C1 = C1
-        self.C2 = C2
-        self.F = galois.GF(2) # Field
-        self.n = self.C1.n + self.C2.n
-        # Hx = [ H1_x  0   ]
-        #      [ 0     H2_x]
-        Hx_top = np.hstack((self.C1.Hx, np.zeros((self.C1.Hx.shape[0], self.C2.n), dtype=int)))
-        Hx_bottom = np.hstack((np.zeros((self.C2.Hx.shape[0], self.C1.n), dtype=int), self.C2.Hx))
-        self.Hx = self.F(np.vstack((Hx_top, Hx_bottom)))
-        Hz_top = np.hstack((self.C1.Hz, np.zeros((self.C1.Hz.shape[0], self.C2.n), dtype=int)))
-        Hz_bottom = np.hstack((np.zeros((self.C2.Hz.shape[0], self.C1.n), dtype=int), self.C2.Hz))
-        self.Hz = self.F(np.vstack((Hz_top, Hz_bottom)))
-        # CSS class 상속
-        super().__init__(self.Hx, self.Hz)
-    def add_edge_qubits(self, num_edge: int):
-        # edge qubit들은 |+> 상태로 초기화
-
-        self.Hx = np.hstack((self.Hx, np.zeros((self.Hx.shape[0], num_edge), dtype=int)))
-        Hedge = np.zeros((num_edge, self.n + num_edge), dtype=int)
-        for i in range(num_edge):
-            Hedge[i, self.n+i] = 1
-        self.Hx = np.vstack((self.Hx, Hedge))
-        self.Hz = np.hstack((self.Hz, np.zeros((self.Hz.shape[0], num_edge), dtype=int)))
-        self.n += num_edge
-        self.Gx = self.Hx
-        self.Gz = self.Gz
-    def measure_operator(self, support, typ):
-        
-        op = self.F(np.zeros((1,self.n), dtype=int))
-        
-        for i in support:
-            op[0, i] = 1
-        print("Measure: ")
-        print(op)
-        # op와 anti-commute하는 기존 check들 모으자.
-        # 그런 check없다면 그냥 추가.
-        # 있다면 그 중 하나 없애고, (존재한다면) 다른 anti-commute하는 check들에 곱한다.
-        # 근데, check의 weight 작게 표현하고 싶으니까, edge qubit들 위주로 없애자.
-        if typ == "X":
-            G_opp = self.Hz
-            G_self = self.Hx
-        elif typ == "Z":
-            G_opp = self.Hx
-            G_self = self.Hz
-        anti_commuting_idx = []
-        for i, stab_gen in enumerate(G_opp):
-            # if stab_gen anti-commutes with op
-            if np.dot(op, stab_gen):
-                anti_commuting_idx.append(i)
-        if len(anti_commuting_idx) == 0:
-            # op가 G_self의 row space에 있다면 놔두고, 없다면 새로운 row 추가
-            if np.linalg.matrix_rank(self.F(np.vstack((G_self,op)))) > np.linalg.matrix_rank(self.F(G_self)):
-                G_self = self.F(np.vstack((G_self, op)))
-        else:
-            anti_commuting_idx = anti_commuting_idx[::-1]   # 뒤에서부터 해야 edge qubit부터 없앰
-            temp = G_opp[anti_commuting_idx[0]]
-            G_opp = self.F(np.delete(G_opp, anti_commuting_idx[0], axis=0))
-            for i in range(1, len(anti_commuting_idx)):
-                G_opp[anti_commuting_idx[i]] = self.F(np.bitwise_xor(temp, G_opp[anti_commuting_idx[i]]))
-            G_self = self.F(np.vstack((G_self, op)))
-
-        if typ == "X":
-            self.Hz = G_opp
-            self.Hx = G_self
-        elif typ == "Z":
-            self.Hx = G_opp
-            self.Hz = G_self
-        print("self.Hx:")
-        for s in self.Hx:
-            print(s,sum([int(ss) for ss in s]), s[[[21,24,30,33]+[57,60,66,69] + [72,73,74,75,76,77,78,79,80,81]]])
-            # s의 1의 개수
-        print("self.Hz:")
-        for s in self.Hz:
-            print(s,sum([int(ss) for ss in s]), s[[[21,24,30,33]+[57,60,66,69] + [72,73,74,75,76,77,78,79,80,81]]])
-        self.Gx = self.Hx
-        self.Gz = self.Hz
-
-    def merge_with_graph(self, A_indices: list[int], B_indices: list[int]):
-        vertices_to_qubit_num = A_indices + [i + self.C1.n for i in B_indices]
-        # 일단 새로운 vertice는 없다고 하자.
-        G = nx.Graph()
-        nodes = [f"A{i}" for i in range(len(A_indices))] + [f"B{i}" for i in range(len(B_indices))]
-        G.add_nodes_from(nodes)
-        if len(nodes) > 1:
-            nx.add_cycle(G, nodes)
-        G.add_edge(nodes[0],nodes[4])
-        G.add_edge(nodes[2],nodes[6])
-        print("cheeger: ",cheeger_constant(G))
-        edge_list = list(G.edges)
-        print("edge:",edge_list)
-        edge_to_idx = {tuple(sorted(e)): i for i, e in enumerate(edge_list)}
-        self.add_edge_qubits(len(G.edges))
-
-        # measure A_v
-        for node in nodes:
-            if node[0] == "A":
-                q = A_indices[int(node[1:])]
-            elif node[0] == "B":
-                q = B_indices[int(node[1:])] + self.C1.n
-            # edges containing node
-            edges = [self.C1.n+self.C2.n+edge_to_idx[e] for e in G.edges if node in e]
-            idxs = [q] + edges
-            self.measure_operator(idxs, typ="Z")
-
-        # cycle_basis에 대해 B_c measure.
-        cycle_basis = nx.cycle_basis(G)
-        for cb in cycle_basis:
-            support = []
-            for node in cb:
-                if node[0] == "A":
-                    q = A_indices[int(node[1:])]
-                elif node[0] == "B":
-                    q = B_indices[int(node[1:])]
-                support.append(q)
-            self.measure_operator(support, typ="X")
-
-        # 이거 measure할 때 stab gen. weight 비정상적으로 (더 줄일수 있는데 안줄이는) 커지는거 고쳐보자.
-
-        cycles = []
-        for i, hx in enumerate(self.Hx):
-            if np.count_nonzero(hx[:self.C1.n+self.C2.n]) == 0:
-                cycles.append(i)
-        for i, hx in enumerate(self.Hx):
-            print("Before weight reduction:", i, np.count_nonzero(hx), hx)
-            if i in cycles:
-                continue
-            # cycles의 행들을 xor해서 Hx의 weight 줄이기
-            # Hx의 각 행의 [self.C1.n+self.C2.n:] 부분의 weight 줄이자.
-            # cycles의 각 index에 해당하는 행들을 포함할지 말지 2^len(cycles) 경우 다 해보기
-            # brute-force
-            min_weight = np.count_nonzero(hx)
-            best_combination = []
-            for select in product([0, 1], repeat=len(cycles)):
-                test_hx = hx.copy()
-                for j, sel in enumerate(select):
-                    if sel == 1:
-                        test_hx = self.F(np.bitwise_xor(test_hx, self.Hx[cycles[j]]))
-                test_weight = np.count_nonzero(test_hx)
-                if test_weight < min_weight:
-                    min_weight = test_weight
-                    best_combination = select
-            if best_combination:
-                new_hx = hx.copy()
-                for j, sel in enumerate(best_combination):
-                    if sel == 1:
-                        new_hx = self.F(np.bitwise_xor(new_hx, self.Hx[cycles[j]]))
-                self.Hx[i] = new_hx
-            print("After weight reduction:", i, np.count_nonzero(self.Hx[i]), self.Hx[i])
-        self.Gx = self.Hx
-        self.Gz = self.Hz   
-        
-        # Z-check의 weight도 줄여야 함.
-            
-
-
-
-        # measure 순서를 바꾸던지.. 어쩌던지..
-        # 그리고 distance 계산해보자.
-        pass
