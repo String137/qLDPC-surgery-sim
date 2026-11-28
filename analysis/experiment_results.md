@@ -1,6 +1,4 @@
-# [[40,8,5]] LP code Memory Experiement
-
-`test.py`의 test15()에 있음
+# [[40,8,5]] LP code Memory Experiment
 
 <img src="images/LP_dist5_expr.svg" >
 
