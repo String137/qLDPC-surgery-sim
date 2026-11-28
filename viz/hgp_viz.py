@@ -1,5 +1,5 @@
 """
-hgp_viz.py — HGPCodePatch / HighRateSurgeryPatch(_ConePatch 계열) 를
+hgp_viz.py — HGPCodePatch / HighRateSurgeryPatch(ConePatch 계열) 를
 클릭 가능한 단일 HTML 파일로 렌더링한다.
 
 외부 의존성 없음. 순수 SVG + vanilla JS, CDN 없음.
@@ -27,12 +27,10 @@ import numpy as np
 # ---------------------------------------------------------------------------
 
 def _patch_roles(patch) -> dict:
-    """patch_name -> 'data' | 'ancilla'. _ConePatch/ConePatch 계열이 아니면 전부 'data'."""
+    """patch_name -> 'data' | 'ancilla'. ConePatch 계열이 아니면 전부 'data'."""
     roles = {}
-    for attr in ("C", "C1", "C2"):
-        sub = getattr(patch, attr, None)
-        if sub is not None:
-            roles[sub._name] = "data"
+    for sub in getattr(patch, "Cs", []):
+        roles[sub._name] = "data"
     a = getattr(patch, "A", None)
     if a is not None:
         roles[a._name] = "ancilla"
@@ -41,9 +39,11 @@ def _patch_roles(patch) -> dict:
 
 def _sub_patches(patch) -> list:
     """local_coord_chk 의 사분면 grid 를 그리기 위한 하위 HGPCodePatch 들.
-    _ConePatch/ConePatch 가 아니면 patch 자기 자신 하나."""
-    subs = [getattr(patch, attr, None) for attr in ("C", "C1", "C2", "A")]
-    subs = [s for s in subs if s is not None]
+    ConePatch 가 아니면 patch 자기 자신 하나."""
+    subs = list(getattr(patch, "Cs", []))
+    a = getattr(patch, "A", None)
+    if a is not None:
+        subs.append(a)
     return subs if subs else [patch]
 
 
@@ -132,7 +132,7 @@ def _extract(patch) -> dict:
 def render(patch, path: str = "viz.html", title: str | None = None) -> str:
     """patch 를 자체 완결 HTML 파일로 렌더링한다.
 
-    patch 는 HGPCodePatch 또는 HighRateSurgeryPatch(_ConePatch 계열).
+    patch 는 HGPCodePatch 또는 HighRateSurgeryPatch(ConePatch 계열).
     반환값은 실제로 쓰여진 경로.
     """
     data = _extract(patch)

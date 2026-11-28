@@ -4,8 +4,8 @@ merged_example.py — MergedHighRateSurgeryPatch 를 클릭 가능한 HTML 로 �
     viz/out_merged.html   C1=[[45,9,3]] (d=3)  +  C2=[[100,4,5]] (d=5)  를
                            앤실라 하나로 merge, 각 코드의 첫 X-logical 곱을 측정.
 
-test.py 의 test21() 과 동일한 구성 (C1, C2 의 distance 가 다를 때
-merge 에 참여 안 한 쪽의 logical distance 가 보존되는지 보기 위한 예제).
+C1, C2 의 distance 가 다를 때 merge 에 참여 안 한 쪽의 logical distance 가
+보존되는지 보기 위한 예제.
 
 실행:  python -m viz.merged_example
 """

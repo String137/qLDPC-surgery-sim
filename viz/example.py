@@ -64,7 +64,7 @@ def main():
                     title=f"HGP code  [[{C.css.n},{C.css.k}]]")
     print("wrote", path1)
 
-    # _ConePatch.__init__ 이 C 의 check 를 참조하므로 surgery 용은 새로 만든다.
+    # ConePatch.__init__ 이 C 의 check 를 참조하므로 surgery 용은 새로 만든다.
     C2 = build_hgp()
     S = build_surgery(C2)
     path2 = render(S, os.path.join(OUT_DIR, "out_surgery.html"),
