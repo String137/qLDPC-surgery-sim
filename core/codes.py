@@ -399,6 +399,8 @@ class LPCodePatch(CodePatch):
     def data_qubits(self) -> list[Qubit]: return self._data_qubits
     def x_checks(self) -> list[Check]:    return self._x_checks
     def z_checks(self) -> list[Check]:    return self._z_checks
+    def _get_qubit_from_idx(self, idx: int) -> Qubit:
+        return self._data_qubits[idx]
     def local_coord(self, q: Qubit):
         ra = len(self.css.Ha)
         ca = len(self.css.Ha[0])
@@ -433,7 +435,7 @@ class LPCodePatch(CodePatch):
             assert idx < ra*rb*p, "X check index out of range"
             x = idx // (rb*p)
             y = (idx % (rb*p))
-            return ((y + ca)*scale_x, x*scale_y)
+            return ((x + ca)*scale_x, y*scale_y)
         elif typ == "Z":
             assert idx < ca*cb*p, "Z check index out of range"
             x = idx // (cb*p)
