@@ -1,7 +1,6 @@
 import numpy as np
 import pulp
 import stim
-from core.primitives import Check, Qubit
 from surgery.surgery import MergedCodeWithGraph
 
 NOISE_GATES = {'Z_ERROR', 'X_ERROR', 'Y_ERROR'}
@@ -515,16 +514,16 @@ class SurgeryLogicalFaultAnalyzer:
         self.c_z_checks = c_z_checks
 
         # C1 H_X, H_Z, logical repr (C1 local index 기준)
-        self.H_X1 = self._checks_to_matrix(merged.C1.x_checks(), merged.C1.data_qubits(), registry)
-        self.H_Z1 = self._checks_to_matrix(merged.C1.z_checks(), merged.C1.data_qubits(), registry)
-        self.L_X1 = self._logicals_to_matrix(merged.C1, registry, 'X')
-        self.L_Z1 = self._logicals_to_matrix(merged.C1, registry, 'Z')
+        self.H_X1 = self._checks_to_matrix(merged.C1.x_checks(), merged.C1.data_qubits())
+        self.H_Z1 = self._checks_to_matrix(merged.C1.z_checks(), merged.C1.data_qubits())
+        self.L_X1 = self._logicals_to_matrix(merged.C1, 'X')
+        self.L_Z1 = self._logicals_to_matrix(merged.C1, 'Z')
 
         # C2 H_X, H_Z, logical repr (C2 local index 기준)
-        self.H_X2 = self._checks_to_matrix(merged.C2.x_checks(), merged.C2.data_qubits(), registry)
-        self.H_Z2 = self._checks_to_matrix(merged.C2.z_checks(), merged.C2.data_qubits(), registry)
-        self.L_X2 = self._logicals_to_matrix(merged.C2, registry, 'X')
-        self.L_Z2 = self._logicals_to_matrix(merged.C2, registry, 'Z')
+        self.H_X2 = self._checks_to_matrix(merged.C2.x_checks(), merged.C2.data_qubits())
+        self.H_Z2 = self._checks_to_matrix(merged.C2.z_checks(), merged.C2.data_qubits())
+        self.L_X2 = self._logicals_to_matrix(merged.C2, 'X')
+        self.L_Z2 = self._logicals_to_matrix(merged.C2, 'Z')
 
         # deformed A_v meas index (merge_0 round):
         # merged.x_checks()에서 C1, C2 x_checks 다음이 deformed A_v
@@ -548,14 +547,14 @@ class SurgeryLogicalFaultAnalyzer:
                     self.anc_q_to_meas_idx[q] = k
 
         # post 첫 round Z check meas index: check → meas index
-        post_first_label = f"post_0"
+        post_first_label = "post_0"
         self.post0_z_meas_idx = {}
         for k, entry in self.meas_record.items():
             if entry['label'] == post_first_label and entry['check'] is not None:
                 if entry['check'].pauli == 'Z':
                     self.post0_z_meas_idx[entry['check']] = k
 
-    def _checks_to_matrix(self, checks, data_qubits, registry):
+    def _checks_to_matrix(self, checks, data_qubits):
         """Check list → (r, n) binary matrix, n = len(data_qubits)"""
         q_to_local = {q: i for i, q in enumerate(data_qubits)}
         n = len(data_qubits)
@@ -566,12 +565,12 @@ class SurgeryLogicalFaultAnalyzer:
                     H[i, q_to_local[q]] = 1
         return H
 
-    def _logicals_to_matrix(self, patch, registry, pauli_type: str):
+    def _logicals_to_matrix(self, patch, pauli_type: str):
         """patch의 logical repr → list of binary vectors (local qubit index 기준)"""
         data_qubits = patch.data_qubits()
         q_to_local = {q: i for i, q in enumerate(data_qubits)}
         n = len(data_qubits)
-        logicals = patch._x_logicals if pauli_type == 'X' else patch._z_logicals
+        logicals = [patch.get_logical_representative(pauli_type, i) for i in range(patch.get_k())]
         result = []
         for l in logicals:
             vec = np.zeros(n, dtype=int)
@@ -596,11 +595,6 @@ class SurgeryLogicalFaultAnalyzer:
         return np.array([int(round(pulp.value(c[i]))) for i in range(n)])
 
     def is_surgery_logical_fault(self, e_vec: np.ndarray) -> bool:
-        # undetectable 조건
-        if not np.all(self.H_dem @ e_vec % 2 == 0):
-            print("It is detectable!")
-            # return False
-
         # e_vec에 해당하는 fault들의 효과 합산
         meas_flips = np.zeros(self.error_sim.n_meas, dtype=int)
         z_errors = np.zeros(self.n_qubits, dtype=int)
@@ -610,19 +604,12 @@ class SurgeryLogicalFaultAnalyzer:
                 meas_flips ^= self.error_sim.fault_meas_flips[i]
                 z_errors ^= self.error_sim.fault_z_errors[i]
                 x_errors ^= self.error_sim.fault_x_errors[i]
-        print("meas_flips:")
-        print(meas_flips)
-        print("z_errors: ")
-        print(z_errors)
-        print("x_errors: ")
-        print(x_errors)
         # --- 조건 2: XX measurement outcome 오류 ---
         xx_outcome = 0
         for idx in self.av_merge0_meas_indices:
             xx_outcome ^= meas_flips[idx]
         if xx_outcome == 1:
-            print("The XX measurement outcome is wrong!")
-            # return True
+            return True
 
         # --- 조건 1: code block logical error ---
         anc_meas = {q: meas_flips[idx] for q, idx in self.anc_q_to_meas_idx.items()}
@@ -642,7 +629,6 @@ class SurgeryLogicalFaultAnalyzer:
 
         n_c1z = len(self.merged.C1.z_checks())
         for i, f0_check in enumerate(self._f0):
-            print(f"i={i}, f0_check={f0_check}, weight={f0_check.weight()}")
             if f0_check.weight() == 0:
                 continue
             prod = 0
@@ -653,39 +639,23 @@ class SurgeryLogicalFaultAnalyzer:
                     syndrome_flip_c1[i] ^= 1
                 else:
                     syndrome_flip_c2[i - n_c1z] ^= 1
-        print("syndrome_flip_c1 ",syndrome_flip_c1)
-        print("syndrome_flip_c2 ",syndrome_flip_c2)
         # C1 logical error check (Z error → X logical)
         # syndrome_flip_c1: MZ 결과로 인한 Z check syndrome offset
         c1_z = self._inner_ilp(z1, self.H_X1)
         final1_z = (z1 + c1_z) % 2
-        print("***** Codeblock 1 *****")
-        print("cumulated Z error: ",z1)
-        print("Z correction: ",c1_z)
-        print("Final Z error: ",final1_z)
         logical_err_c1_z = any(int(l @ final1_z % 2) for l in self.L_X1)
 
         c1_x = self._inner_ilp(x1, self.H_Z1, syndrome_offset=syndrome_flip_c1)
         final1_x = (x1 + c1_x) % 2
-        print("cumulated X error: ",x1)
-        print("X correction: ",c1_x)
-        print("Final X error: ",final1_x)
         logical_err_c1_x = any(int(l @ final1_x % 2) for l in self.L_Z1)
 
         # C2 logical error check
         c2_z = self._inner_ilp(z2, self.H_X2)
         final2_z = (z2 + c2_z) % 2
-        print("***** Codeblock 2 *****")
-        print("cumulated Z error: ",z2)
-        print("Z correction: ",c2_z)
-        print("Final Z error: ",final2_z)
         logical_err_c2_z = any(int(l @ final2_z % 2) for l in self.L_X2)
 
         c2_x = self._inner_ilp(x2, self.H_Z2, syndrome_offset=syndrome_flip_c2)
         final2_x = (x2 + c2_x) % 2
-        print("cumulated X error: ",x2)
-        print("X correction: ",c2_x)
-        print("Final X error: ",final2_x)
         logical_err_c2_x = any(int(l @ final2_x % 2) for l in self.L_Z2)
 
         return logical_err_c1_z or logical_err_c1_x or logical_err_c2_z or logical_err_c2_x

@@ -703,6 +703,8 @@ class RotatedSurfaceCode(CSS):
                     Hx.append(chk)
         
         super().__init__(galois.GF(2)(np.array(Hx)),galois.GF(2)(np.array(Hz)))
+        self.d = d
+        self.dx = self.dz = d   # rotated surface code는 dx = dz = d
 
 
     def _coord2idx(self, x: int, y: int) -> int:

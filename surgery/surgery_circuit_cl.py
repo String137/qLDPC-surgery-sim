@@ -13,9 +13,8 @@ Phenomenological noise model approximation:
 from __future__ import annotations
 import stim
 from collections import defaultdict
-from core.primitives import Qubit, Check, QubitRegistry
-from core.codes import CodePatch, EmptyPatch, SurfaceCode
-import numpy as np
+from core.primitives import Qubit
+from core.codes import CodePatch
 
 
 class LRCCircuitBuilder:
@@ -174,12 +173,12 @@ class LRCCircuitBuilder:
                 path.append((i, j, c1))
                 u = i
             for u, j, old_c in path:
-                new_c = c1 if old_c == c2 else c2
-                eidx = edge_index[(u, j)]
-                color[eidx] = new_c
                 del check_colors[u][old_c]
-                check_colors[u][new_c] = j
                 del qubit_colors[j][old_c]
+            for u, j, old_c in path:
+                new_c = c1 if old_c == c2 else c2
+                color[edge_index[(u, j)]] = new_c
+                check_colors[u][new_c] = j
                 qubit_colors[j][new_c] = u
 
         for idx, (i, j) in enumerate(edges):
@@ -372,8 +371,5 @@ class LRCCircuitBuilder:
         # init_rec   = self.get_rec(label="init_logical_z")
         # final_recs = [self.get_rec(label="final_data", target=q) for q in logical_z_support_idx]
         # circuit.append("OBSERVABLE_INCLUDE", [init_rec] + final_recs, 0)
-
-        with open("debug_circuit.svg", "w") as f:
-            f.write(str(circuit.diagram("timeslice-svg")))
 
         return circuit
